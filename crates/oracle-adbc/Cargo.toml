@@ -1,0 +1,19 @@
+[package]
+name = "orkidea-adbc"
+description = "Arrow-native Oracle ADBC driver built on Oracle's pure-Rust oracledb driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+adbc_core.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow-select.workspace = true
+oracledb.workspace = true
+
+[dev-dependencies]
+adbc_core.workspace = true

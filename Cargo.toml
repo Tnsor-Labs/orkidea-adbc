@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/oracle-adbc",
+    "crates/oracle-adbc-ffi",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+repository = "https://github.com/Tnsor-Labs/orkidea-adbc"
+authors = ["Tnsor Labs"]
+
+[workspace.dependencies]
+adbc_core = "0.25"
+adbc_ffi = "0.25"
+adbc_driver_manager = "0.25"
+arrow-array = "59"
+arrow-schema = "59"
+arrow-select = "59"
+oracledb = { version = "=26.0.0-beta.5", features = ["arrow"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = false

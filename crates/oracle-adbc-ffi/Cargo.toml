@@ -1,0 +1,23 @@
+[package]
+name = "orkidea-adbc-ffi"
+description = "ADBC C ABI (cdylib) for the Oracle Arrow driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "adbc_driver_orkidea"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+adbc_core.workspace = true
+adbc_ffi.workspace = true
+oracle_adbc = { package = "orkidea-adbc", path = "../oracle-adbc" }
+
+[dev-dependencies]
+adbc_driver_manager.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
