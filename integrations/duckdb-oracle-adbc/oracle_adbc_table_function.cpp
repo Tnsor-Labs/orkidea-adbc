@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -89,10 +90,49 @@ static duckdb_logical_type logical_type_for_format(const char *format) {
     case 'b':
         return duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
     case 'u':
+    case 'U':
         return duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    case 'z':
+    case 'Z':
+        return duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
+    case 't':
+        return duckdb_create_logical_type(DUCKDB_TYPE_TIMESTAMP);
+    case 'd': {
+        unsigned int width = 0;
+        unsigned int scale = 0;
+        if (std::sscanf(format, "d:%u,%u", &width, &scale) != 2 || width == 0 || width > 38 || scale > width) {
+            return nullptr;
+        }
+        return duckdb_create_decimal_type(static_cast<uint8_t>(width), static_cast<uint8_t>(scale));
+    }
     default:
         return nullptr;
     }
+}
+
+static int64_t timestamp_to_micros(const char *format, int64_t value) {
+    if (format[1] == 'd') {
+        return format[2] == 'D' ? value * 86400LL * 1000000LL : value * 1000LL;
+    }
+    switch (format[2]) {
+    case 's': return value * 1000000LL;
+    case 'm': return value * 1000LL;
+    case 'u': return value;
+    case 'n': return value / 1000LL;
+    default: return value;
+    }
+}
+
+static bool parse_decimal_format(const char *format, uint8_t &width, uint8_t &scale) {
+    unsigned int parsed_width = 0;
+    unsigned int parsed_scale = 0;
+    if (std::sscanf(format, "d:%u,%u", &parsed_width, &parsed_scale) != 2 || parsed_width == 0 ||
+        parsed_width > 38 || parsed_scale > parsed_width) {
+        return false;
+    }
+    width = static_cast<uint8_t>(parsed_width);
+    scale = static_cast<uint8_t>(parsed_scale);
+    return true;
 }
 
 static bool arrow_valid(const ArrowArray &array, int64_t index) {
@@ -158,6 +198,62 @@ static bool copy_arrow_column(duckdb_vector vector, const ArrowSchema &schema, c
             const int32_t end = offsets[source + 1];
             duckdb_vector_assign_string_element_len(vector, row, data + begin,
                                                      static_cast<idx_t>(end - begin));
+            break;
+        }
+        case 'U': {
+            const auto *offsets = static_cast<const int64_t *>(array.buffers[data_buffer]);
+            const auto *data = static_cast<const char *>(array.buffers[data_buffer + 1]);
+            const int64_t begin = offsets[source];
+            const int64_t end = offsets[source + 1];
+            duckdb_vector_assign_string_element_len(vector, row, data + begin,
+                                                     static_cast<idx_t>(end - begin));
+            break;
+        }
+        case 'z':
+        case 'Z': {
+            const auto *data = static_cast<const char *>(array.buffers[data_buffer + 1]);
+            int64_t begin = 0;
+            int64_t end = 0;
+            if (format == 'z') {
+                const auto *offsets = static_cast<const int32_t *>(array.buffers[data_buffer]);
+                begin = offsets[source];
+                end = offsets[source + 1];
+            } else {
+                const auto *offsets = static_cast<const int64_t *>(array.buffers[data_buffer]);
+                begin = offsets[source];
+                end = offsets[source + 1];
+            }
+            duckdb_vector_assign_string_element_len(vector, row, data + begin,
+                                                     static_cast<idx_t>(end - begin));
+            break;
+        }
+        case 't': {
+            const int64_t value = schema.format[1] == 'd' && schema.format[2] == 'D'
+                                      ? static_cast<const int32_t *>(array.buffers[data_buffer])[source]
+                                      : static_cast<const int64_t *>(array.buffers[data_buffer])[source];
+            static_cast<int64_t *>(duckdb_vector_get_data(vector))[row] = timestamp_to_micros(schema.format, value);
+            break;
+        }
+        case 'd': {
+            uint8_t width = 0;
+            uint8_t scale = 0;
+            if (!parse_decimal_format(schema.format, width, scale)) {
+                duckdb_function_set_error(info, "invalid Arrow decimal format");
+                return false;
+            }
+            const auto *values = static_cast<const __int128 *>(array.buffers[data_buffer]);
+            const __int128 value = values[source];
+            if (width <= 4) {
+                static_cast<int16_t *>(duckdb_vector_get_data(vector))[row] = static_cast<int16_t>(value);
+            } else if (width <= 9) {
+                static_cast<int32_t *>(duckdb_vector_get_data(vector))[row] = static_cast<int32_t>(value);
+            } else if (width <= 18) {
+                static_cast<int64_t *>(duckdb_vector_get_data(vector))[row] = static_cast<int64_t>(value);
+            } else {
+                auto *hugeints = static_cast<duckdb_hugeint *>(duckdb_vector_get_data(vector));
+                hugeints[row].lower = static_cast<uint64_t>(value);
+                hugeints[row].upper = static_cast<uint64_t>(value >> 64);
+            }
             break;
         }
         default:

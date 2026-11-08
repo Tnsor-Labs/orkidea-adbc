@@ -15,7 +15,7 @@ use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
 use adbc_core::{Database, Optionable};
 use oracledb::Connection;
 
-use crate::config::DbOptions;
+use crate::config::{DbOptions, OPT_CALL_TIMEOUT_MS};
 use crate::connection::OracleConnection;
 use crate::error::{error, from_oracle};
 
@@ -28,7 +28,13 @@ pub struct OracleDatabase {
 impl OracleDatabase {
     fn connect(&self) -> Result<Connection> {
         let config = self.options.build_config()?;
-        oracledb::connect(config).map_err(from_oracle)
+        let connection = oracledb::connect(config).map_err(from_oracle)?;
+        if let Some(timeout_ms) = self.options.get_i64(OPT_CALL_TIMEOUT_MS)? {
+            connection
+                .set_call_timeout(Some(std::time::Duration::from_millis(timeout_ms as u64)))
+                .map_err(from_oracle)?;
+        }
+        Ok(connection)
     }
 }
 

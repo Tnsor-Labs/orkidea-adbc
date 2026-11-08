@@ -27,6 +27,7 @@ pub(crate) const OPT_WALLET_LOCATION: &str = "oracle.wallet_location";
 pub(crate) const OPT_WALLET_PASSWORD: &str = "oracle.wallet_password";
 pub(crate) const OPT_STMT_CACHE_SIZE: &str = "oracle.stmt_cache_size";
 pub(crate) const OPT_CONNECT_TIMEOUT_MS: &str = "oracle.connect_timeout_ms";
+pub(crate) const OPT_CALL_TIMEOUT_MS: &str = "oracle.call_timeout_ms";
 pub(crate) const OPT_PROGRAM: &str = "oracle.program";
 pub(crate) const OPT_MACHINE: &str = "oracle.machine";
 pub(crate) const OPT_TERMINAL: &str = "oracle.terminal";
@@ -45,6 +46,7 @@ const KNOWN_OPTIONS: &[&str] = &[
     OPT_WALLET_PASSWORD,
     OPT_STMT_CACHE_SIZE,
     OPT_CONNECT_TIMEOUT_MS,
+    OPT_CALL_TIMEOUT_MS,
     OPT_PROGRAM,
     OPT_MACHINE,
     OPT_TERMINAL,
@@ -76,6 +78,7 @@ impl DbOptions {
         match key {
             OPT_STMT_CACHE_SIZE
             | OPT_CONNECT_TIMEOUT_MS
+            | OPT_CALL_TIMEOUT_MS
             | OPT_BATCH_SIZE
             | OPT_FETCH_ARRAY_SIZE
             | OPT_PREFETCH_ROWS => {

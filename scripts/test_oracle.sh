@@ -6,6 +6,13 @@ set -euo pipefail
 echo "Running Rust ADBC smoke tests"
 cargo test -p orkidea-adbc --test oracle_smoke -- --nocapture
 
+if [[ -n "${ORACLE_ADBC_EXTENSION:-}" ]]; then
+  echo "Running DuckDB Orkidea integration tests"
+  ./scripts/test_duckdb_orkidea.sh
+else
+  echo "ORACLE_ADBC_EXTENSION is not set; skipping DuckDB Orkidea test"
+fi
+
 if [[ -n "${ORACLE_ODBC_CONN:-}" ]]; then
   : "${DUCKDB_BIN:=duckdb}"
   : "${ORACLE_HOME:=/opt/oracle/product/21c/dbhomeXE}"

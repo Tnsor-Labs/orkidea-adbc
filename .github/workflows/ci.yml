@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo check --workspace
+      - run: cargo test --workspace
+      - run: cargo build --release -p orkidea-adbc-ffi
+
+  source-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check executable scripts
+        run: bash -n scripts/*.sh
+      - name: Check for committed local credentials
+        run: |
+          ! git grep -n -E 'Oracle123|AdbcDemo123|Arrow123|APP_USER_PASSWORD=' -- . ':!Cargo.lock'

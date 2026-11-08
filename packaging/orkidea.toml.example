@@ -1,0 +1,7 @@
+manifest_version = 1
+name = "orkidea"
+version = "0.1.0"
+
+[Driver]
+shared = "/absolute/path/to/libadbc_driver_orkidea.so"
+entrypoint = "OrkideaDriverInit"

@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use adbc_core::options::{InfoCode, IngestMode, OptionDatabase, OptionStatement};
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
-use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, Float64Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use oracle_adbc::OracleDriver;
+use orkidea_adbc::OracleDriver;
 
-fn database() -> Option<oracle_adbc::OracleDatabase> {
+fn database() -> Option<orkidea_adbc::OracleDatabase> {
     let Ok(uri) = std::env::var("ORACLE_ADBC_URI") else {
         eprintln!("skipping Oracle smoke test: ORACLE_ADBC_URI is not set");
         return None;
@@ -26,12 +26,25 @@ fn query_arrow_against_free() {
     let mut connection = database.new_connection().unwrap();
     let mut statement = connection.new_statement().unwrap();
     statement
-        .set_sql_query("SELECT 1 AS value, 'hello' AS text FROM dual")
+        .set_sql_query(
+            "SELECT 1 AS value, 'hello' AS text FROM dual UNION ALL \
+             SELECT 2, CAST(NULL AS VARCHAR2(20)) FROM dual",
+        )
         .unwrap();
     let mut reader = statement.execute().unwrap();
     let batch = reader.next().unwrap().unwrap();
-    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(batch.num_rows(), 2);
     assert_eq!(batch.schema().field(1).data_type(), &DataType::Utf8);
+    assert_eq!(
+        batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(1),
+        2.0
+    );
+    assert!(batch.column(1).is_null(1));
 }
 
 #[test]

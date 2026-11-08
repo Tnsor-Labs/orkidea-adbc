@@ -13,6 +13,9 @@ The driver exports Oracle query results as Arrow record batches and supports
 ADBC metadata and bulk ingestion APIs. The DuckDB integration exposes the
 `orkidea_adbc_query(sql, uri)` table function.
 
+For ADBC driver-manager installation, use the manifest short name `orkidea`
+and set its manifest entrypoint to `OrkideaDriverInit`.
+
 ## Build
 
 ```bash
