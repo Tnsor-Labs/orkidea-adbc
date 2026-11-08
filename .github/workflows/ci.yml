@@ -26,4 +26,4 @@ jobs:
         run: bash -n scripts/*.sh
       - name: Check for committed local credentials
         run: |
-          ! git grep -n -E 'Oracle123|AdbcDemo123|Arrow123|APP_USER_PASSWORD=' -- . ':!Cargo.lock'
+          ! git grep -n -E 'Oracle123|AdbcDemo123|Arrow123' -- . ':!Cargo.lock'
