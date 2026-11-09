@@ -44,22 +44,35 @@ covered by CI or release validation.
   Substrait, and ADBC version fields
 - `get_table_schema` for an individual Oracle table or view, reporting the
   declared Oracle type of each column
-- `get_table_types` for tables and views
-- `get_statistic_names` and `get_statistics` return valid empty result sets
-- `get_objects` returns the standard ADBC schema but does not yet enumerate
-  Oracle catalogs, schemas, tables, columns, or constraints
+- `get_objects` at every depth: schemas, tables, views, materialized views,
+  temporary tables, columns with ODBC-style metadata (types, sizes,
+  defaults, comments, identity and virtual columns), and primary key,
+  unique, foreign key, and check constraints. See
+  [docs/catalog.md](docs/catalog.md)
+- `get_statistics` from Oracle optimizer statistics: row count, distinct
+  count, null count, and average width
+- `get_table_types`: `TABLE`, `VIEW`, `MATERIALIZED VIEW`, `TEMPORARY TABLE`
+- `current_catalog` reports the connected container (PDB) name
 - Schema discovery with `execute_schema`, matching `execute` exactly
 - Bulk ingestion with `create`, `append`, `create_append`, and `replace`
   from a batch or a stream. Ingests are all-or-nothing, `replace` swaps the
   table in only after a complete load, and temporary ingests use Oracle
   global or private temporary tables. See
   [docs/type-support.md](docs/type-support.md#bulk-ingestion-arrow--oracle)
-- Oracle call timeouts through `oracle.call_timeout_ms`, plus fetch tuning
-  through `oracle.fetch_array_size` and `oracle.prefetch_rows`
+- PL/SQL and stored procedures: OUT / IN OUT parameters come back as a
+  result row, a REF CURSOR OUT parameter streams as the result set, and DML
+  `RETURNING ... INTO` returns the affected rows. Parameters bind by name
+  when the names match. See [docs/plsql.md](docs/plsql.md)
+- `VECTOR` parameters and ingest from Arrow lists, for similarity search and
+  embedding loads
+- Connection options: privileged connections (`sysdba` and others), password
+  change on connect, session time zone, edition, end-to-end tracing
+  attributes, call and connect timeouts, and fetch tuning. Secret options are
+  write-only. See [docs/options.md](docs/options.md)
 
-Partitioned execution, Substrait, Oracle procedures, scheduler jobs, and other
-server-management features are not implemented. Procedures and jobs are also
-outside the relational query and ingestion model exposed by ADBC.
+Partitioned execution, Substrait, statement cancellation, and proxy
+authentication are not implemented. Scheduler jobs and other
+server-management features are outside the model ADBC exposes.
 
 ## Build
 

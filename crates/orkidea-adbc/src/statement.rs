@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use adbc_core::options::{IngestMode, OptionStatement, OptionValue};
 use adbc_core::{Optionable, PartitionedResult, Statement};
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use oracledb::{BindParameters, Cursor, ToDbValue};
+use oracledb::{Cursor, Row, ToDbValue};
 
 use crate::config::{
     validate_number_scale, OPT_BATCH_SIZE, OPT_FETCH_ARRAY_SIZE, OPT_PREFETCH_ROWS,
@@ -27,8 +28,10 @@ use crate::config::{
 use crate::connection::ConnState;
 use crate::error::{error, expect_bool, expect_int, expect_string, from_oracle};
 use crate::ingest;
-use crate::params::param_row;
-use crate::reader::{CursorSource, NoMoreCursors, OracleBatchReader};
+use crate::params::{for_binds, param_row};
+use crate::reader::{
+    cursor_rows, fetched_rows, NoMoreRows, OracleBatchReader, QueuedRows, RowSource, Rows,
+};
 use crate::types::{plan_columns, schema_of, TypeOptions, UnconstrainedNumber};
 
 pub(crate) const DEFAULT_BATCH_SIZE: usize = 8192;
@@ -85,10 +88,8 @@ fn execute_batches(
             let mut offset = 0;
             while offset < rows {
                 let len = chunk_rows.min(rows - offset);
-                let result = conn
-                    .execute_batch(sql, BindParameters::Arrow(batch.slice(offset, len)))
-                    .map_err(|e| {
-                        let mut err = from_oracle(e);
+                let result = crate::params::execute_chunk(conn, sql, batch.slice(offset, len))
+                    .map_err(|mut err| {
                         err.message = format!(
                             "executing parameter rows {}..{} failed: {}",
                             offset_total + offset,
@@ -97,7 +98,7 @@ fn execute_batches(
                         );
                         err
                     })?;
-                affected += result.rows_affected();
+                affected += result;
                 offset += len;
             }
             offset_total += rows;
@@ -119,7 +120,7 @@ struct ParamCursors {
     tuning: FetchTuning,
 }
 
-impl CursorSource for ParamCursors {
+impl ParamCursors {
     fn next_cursor(&mut self) -> Result<Option<Cursor>> {
         if self.next_row >= self.params.num_rows() {
             return Ok(None);
@@ -128,6 +129,24 @@ impl CursorSource for ParamCursors {
         self.next_row += 1;
         open_cursor(&self.state, &self.sql, &row.as_refs(), self.tuning).map(Some)
     }
+}
+
+impl RowSource for ParamCursors {
+    fn next_rows(&mut self) -> Result<Option<Rows>> {
+        Ok(self.next_cursor()?.map(cursor_rows))
+    }
+}
+
+/// How a statement is executed by `execute()`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    Query,
+    /// PL/SQL blocks: OUT binds (or a single REF CURSOR) form the result.
+    PlSql,
+    /// DML with `RETURNING ... INTO`: the returned rows form the result.
+    DmlReturning,
+    /// Other DML and DDL: an empty result.
+    Other,
 }
 
 /// Data bound to a statement: one batch (reusable) or a stream (consumed by
@@ -273,16 +292,44 @@ impl OracleStatement {
         }
     }
 
-    /// Classifies the statement (query, DML, ...) with oracledb's client-side
-    /// SQL parser. No round trip to the server.
-    fn is_query(&self, sql: &str) -> Result<bool> {
+    /// Bind placeholder names in order of first appearance (client-side; no
+    /// round trip).
+    fn bind_names(&self, sql: &str) -> Result<Vec<String>> {
         let conn = self.state.lock()?;
         let stmt = conn
             .statement(sql)
             .map_err(from_oracle)?
             .build()
             .map_err(from_oracle)?;
-        Ok(stmt.is_query())
+        Ok(stmt.bind_names().to_vec())
+    }
+
+    /// The bound parameters ordered for the statement's placeholders.
+    fn ordered_params(&mut self, sql: &str) -> Result<Option<RecordBatch>> {
+        match self.bound_params()? {
+            None => Ok(None),
+            Some(batch) => Ok(Some(for_binds(&self.bind_names(sql)?, batch)?)),
+        }
+    }
+
+    /// Classifies the statement with oracledb's client-side SQL parser. No
+    /// round trip to the server.
+    fn classify(&self, sql: &str) -> Result<Kind> {
+        let conn = self.state.lock()?;
+        let stmt = conn
+            .statement(sql)
+            .map_err(from_oracle)?
+            .build()
+            .map_err(from_oracle)?;
+        Ok(if stmt.is_query() {
+            Kind::Query
+        } else if stmt.is_plsql() {
+            Kind::PlSql
+        } else if stmt.is_dml_returning() {
+            Kind::DmlReturning
+        } else {
+            Kind::Other
+        })
     }
 
     /// Parses and describes the statement on the server without executing it.
@@ -301,25 +348,27 @@ impl OracleStatement {
 
     fn execute_query(&mut self) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
         let sql = self.sql()?;
-        if !self.is_query(&sql)? {
-            // ADBC allows execute() on any statement; non-queries yield an
-            // empty result with an empty schema.
-            self.execute_non_query(&sql)?;
-            let schema = Arc::new(Schema::empty());
-            return Ok(Box::new(OracleBatchReader::new(
-                schema,
-                Vec::new(),
-                None,
-                Box::new(NoMoreCursors),
-                self.batch_size,
-            )?));
+        match self.classify(&sql)? {
+            Kind::Query => {}
+            kind @ (Kind::PlSql | Kind::DmlReturning) => {
+                return self.execute_with_outputs(&sql, kind)
+            }
+            Kind::Other => {
+                // ADBC allows execute() on any statement; non-queries yield
+                // an empty result with an empty schema.
+                self.execute_non_query(&sql)?;
+                return Ok(Box::new(OracleBatchReader::empty(
+                    Arc::new(Schema::empty()),
+                    Vec::new(),
+                )?));
+            }
         }
 
-        let params = self.bound_params()?;
-        let (first, source): (Option<Cursor>, Box<dyn CursorSource>) = match params {
+        let params = self.ordered_params(&sql)?;
+        let (first, source): (Option<Cursor>, Box<dyn RowSource>) = match params {
             None => (
                 Some(open_cursor(&self.state, &sql, &[], self.tuning)?),
-                Box::new(NoMoreCursors),
+                Box::new(NoMoreRows),
             ),
             Some(params) => {
                 let mut source = ParamCursors {
@@ -341,8 +390,124 @@ impl OracleStatement {
         Ok(Box::new(OracleBatchReader::new(
             schema,
             plans,
-            first,
+            first.map(cursor_rows),
             source,
+            self.batch_size,
+        )?))
+    }
+
+    /// Executes a PL/SQL block or a DML RETURNING statement once per bound
+    /// parameter row and returns its outputs:
+    ///
+    /// - PL/SQL with exactly one OUT bind of type REF CURSOR: the cursor's
+    ///   rows (one cursor per execution, concatenated);
+    /// - other PL/SQL: one row of OUT/IN OUT values per execution, columns
+    ///   named after the binds; no OUT binds gives an empty result;
+    /// - DML RETURNING: the returned rows.
+    fn execute_with_outputs(
+        &mut self,
+        sql: &str,
+        kind: Kind,
+    ) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
+        self.ensure_writable()?;
+        let params = self.ordered_params(sql)?;
+        let executions = params.as_ref().map_or(1, RecordBatch::num_rows);
+        let mut out_rows: Vec<Row> = Vec::new();
+        let mut cursors: VecDeque<Cursor> = VecDeque::new();
+        let mut metadata: Vec<oracledb::Metadata> = Vec::new();
+        {
+            let conn = self.state.lock()?;
+            for index in 0..executions {
+                let row = params.as_ref().map(|p| param_row(p, index)).transpose()?;
+                let refs = row.as_ref().map(|r| r.as_refs()).unwrap_or_default();
+                let mut stmt = conn
+                    .statement(sql)
+                    .map_err(from_oracle)?
+                    .build()
+                    .map_err(from_oracle)?;
+                let mut result = stmt.execute(&refs).map_err(|e| {
+                    let mut err = from_oracle(e);
+                    if executions > 1 {
+                        err.message = format!("parameter row {index}: {}", err.message);
+                    }
+                    err
+                })?;
+                if metadata.is_empty() {
+                    metadata = stmt.out_metadata().to_vec();
+                }
+                match kind {
+                    Kind::DmlReturning => out_rows.extend(result.returned_data()),
+                    _ => {
+                        let mut out = result.out_bind_data();
+                        let columns = out.columns().to_vec();
+                        if columns.is_empty() {
+                            continue;
+                        }
+                        let cursor_columns = columns
+                            .iter()
+                            .filter(|c| c.db_type() == oracledb::DB_TYPE_CURSOR)
+                            .count();
+                        match (columns.len(), cursor_columns) {
+                            (_, 0) => out_rows.push(out),
+                            (1, 1) => {
+                                cursors.push_back(out.take::<Cursor>(0).map_err(from_oracle)?)
+                            }
+                            _ => {
+                                return Err(error(
+                                    "a PL/SQL block can return either one REF CURSOR OUT bind \
+                                     or scalar OUT binds, not both",
+                                    Status::NotImplemented,
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            self.state.commit_if_autocommit(&conn)?;
+        }
+
+        // OUT bind metadata carries no meaningful nullability: any output
+        // can be NULL.
+        let nullable = |plans: Vec<crate::types::ColumnPlan>| -> Vec<crate::types::ColumnPlan> {
+            plans
+                .into_iter()
+                .map(|mut p| {
+                    p.field = p.field.with_nullable(true);
+                    p
+                })
+                .collect()
+        };
+        if let Some(first) = cursors.pop_front() {
+            let plans = plan_columns(first.columns(), &self.type_options)?;
+            let rest = cursors.into_iter().map(cursor_rows).collect();
+            return Ok(Box::new(OracleBatchReader::new(
+                schema_of(&plans),
+                plans,
+                Some(cursor_rows(first)),
+                Box::new(QueuedRows(rest)),
+                self.batch_size,
+            )?));
+        }
+        let columns = out_rows
+            .first()
+            .map(|r| r.columns().to_vec())
+            .unwrap_or(metadata);
+        if kind == Kind::PlSql && out_rows.is_empty() {
+            return Ok(Box::new(OracleBatchReader::empty(
+                Arc::new(Schema::empty()),
+                Vec::new(),
+            )?));
+        }
+        let plans = nullable(plan_columns(&columns, &self.type_options)?);
+        let schema = schema_of(&plans);
+        if out_rows.is_empty() {
+            return Ok(Box::new(OracleBatchReader::empty(schema, plans)?));
+        }
+        Ok(Box::new(OracleBatchReader::new(
+            schema,
+            plans,
+            Some(fetched_rows(out_rows)),
+            Box::new(NoMoreRows),
             self.batch_size,
         )?))
     }
@@ -356,7 +521,19 @@ impl OracleStatement {
                 .execute(sql, &[] as &[&dyn ToDbValue])
                 .map_err(from_oracle)?
                 .rows_affected(),
-            Some((_, batches)) => execute_batches(&conn, sql, batches, self.batch_size)?,
+            Some((_, batches)) => {
+                let names = {
+                    let stmt = conn
+                        .statement(sql)
+                        .map_err(from_oracle)?
+                        .build()
+                        .map_err(from_oracle)?;
+                    stmt.bind_names().to_vec()
+                };
+                let batches: BatchIter =
+                    Box::new(batches.map(move |b| b.and_then(|b| for_binds(&names, b))));
+                execute_batches(&conn, sql, batches, self.batch_size)?
+            }
         };
         self.state.commit_if_autocommit(&conn)?;
         Ok(affected.min(i64::MAX as u64) as i64)

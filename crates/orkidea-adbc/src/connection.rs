@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -21,7 +21,10 @@ use arrow_array::RecordBatchReader;
 use arrow_schema::Schema;
 use oracledb::Connection as OracleConn;
 
-use crate::config::DbOptions;
+use crate::catalog;
+use crate::config::{
+    DbOptions, OPT_ACTION, OPT_CLIENT_IDENTIFIER, OPT_CLIENT_INFO, OPT_MODULE, TRACING_OPTIONS,
+};
 use crate::error::{error, expect_bool, expect_string, from_oracle};
 use crate::metadata;
 use crate::statement::OracleStatement;
@@ -32,6 +35,8 @@ pub(crate) struct ConnState {
     pub(crate) read_only: AtomicBool,
     pub(crate) current_schema: Mutex<Option<String>>,
     pub(crate) isolation_level: Mutex<Option<String>>,
+    /// Tracing attributes set on this connection (oracledb has no getters).
+    pub(crate) tracing: Mutex<HashMap<String, String>>,
     pub(crate) defaults: DbOptions,
 }
 
@@ -67,23 +72,46 @@ pub struct OracleConnection {
 
 impl OracleConnection {
     pub(crate) fn new(conn: OracleConn, defaults: &DbOptions) -> Result<Self> {
-        Ok(Self {
+        let connection = Self {
             state: Arc::new(ConnState {
                 conn: Mutex::new(conn),
                 autocommit: AtomicBool::new(true),
-                read_only: AtomicBool::new(
-                    defaults
-                        .get_string("oracle.read_only")
-                        .ok()
-                        .flatten()
-                        .as_deref()
-                        .is_some_and(|v| v.eq_ignore_ascii_case("true")),
-                ),
+                read_only: AtomicBool::new(false),
                 current_schema: Mutex::new(None),
                 isolation_level: Mutex::new(None),
+                tracing: Mutex::new(HashMap::new()),
                 defaults: defaults.clone(),
             }),
-        })
+        };
+        for key in TRACING_OPTIONS {
+            if let Some(value) = defaults.get_string(key)? {
+                connection.set_tracing(key, &value)?;
+            }
+        }
+        Ok(connection)
+    }
+
+    /// Sets an end-to-end tracing attribute (`V$SESSION.MODULE`, `ACTION`,
+    /// `CLIENT_IDENTIFIER`, `CLIENT_INFO`, or the database operation). The
+    /// value is sent with the next round trip.
+    fn set_tracing(&self, key: &str, value: &str) -> Result<()> {
+        {
+            let conn = self.state.lock()?;
+            match key {
+                OPT_MODULE => conn.set_module(value),
+                OPT_ACTION => conn.set_action(value),
+                OPT_CLIENT_IDENTIFIER => conn.set_client_identifier(value),
+                OPT_CLIENT_INFO => conn.set_client_info(value),
+                _ => conn.set_db_op(value),
+            }
+            .map_err(from_oracle)?;
+        }
+        self.state
+            .tracing
+            .lock()
+            .map_err(|_| error("connection lock poisoned", Status::Internal))?
+            .insert(key.to_string(), value.to_string());
+        Ok(())
     }
 
     pub(crate) fn autocommit(&self) -> bool {
@@ -116,6 +144,10 @@ impl Optionable for OracleConnection {
                 }
                 Ok(())
             }
+            key if TRACING_OPTIONS.contains(&key) => {
+                let value = expect_string(&value, key)?;
+                self.set_tracing(key, &value)
+            }
             adbc_core::constants::ADBC_CONNECTION_OPTION_READ_ONLY => {
                 let enabled = expect_bool(&value, key)?;
                 self.state.read_only.store(enabled, Ordering::Relaxed);
@@ -134,10 +166,23 @@ impl Optionable for OracleConnection {
                     Some(schema);
                 Ok(())
             }
-            adbc_core::constants::ADBC_CONNECTION_OPTION_CURRENT_CATALOG => Err(error(
-                "Oracle does not support ADBC current catalog; use current schema",
-                Status::NotImplemented,
-            )),
+            adbc_core::constants::ADBC_CONNECTION_OPTION_CURRENT_CATALOG => {
+                // The catalog is the current container; switching containers
+                // requires a new connection.
+                let requested = expect_string(&value, key)?;
+                let current = catalog::current_catalog(&*self.state.lock()?)?;
+                if requested == current {
+                    Ok(())
+                } else {
+                    Err(error(
+                        format!(
+                            "cannot switch catalog to {requested:?}: the catalog is the \
+                             connected container ({current}); connect to that service instead"
+                        ),
+                        Status::NotImplemented,
+                    ))
+                }
+            }
             adbc_core::constants::ADBC_CONNECTION_OPTION_ISOLATION_LEVEL => {
                 let level = expect_string(&value, key)?;
                 let sql = match level.as_str() {
@@ -191,6 +236,17 @@ impl Optionable for OracleConnection {
             adbc_core::constants::ADBC_CONNECTION_OPTION_AUTOCOMMIT => {
                 Ok(self.autocommit().to_string())
             }
+            adbc_core::constants::ADBC_CONNECTION_OPTION_CURRENT_CATALOG => {
+                catalog::current_catalog(&*self.state.lock()?)
+            }
+            key if TRACING_OPTIONS.contains(&key) => self
+                .state
+                .tracing
+                .lock()
+                .map_err(|_| error("connection lock poisoned", Status::Internal))?
+                .get(key)
+                .cloned()
+                .ok_or_else(|| error(format!("{key} has not been set"), Status::NotFound)),
             adbc_core::constants::ADBC_CONNECTION_OPTION_READ_ONLY => {
                 Ok(self.read_only().to_string())
             }
@@ -246,7 +302,7 @@ impl Connection for OracleConnection {
         table_type: Option<Vec<&str>>,
         column_name: Option<&str>,
     ) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
-        metadata::get_objects(
+        catalog::get_objects(
             &self.state,
             depth,
             catalog,
@@ -281,7 +337,7 @@ impl Connection for OracleConnection {
         table_name: Option<&str>,
         approximate: bool,
     ) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
-        metadata::get_statistics(catalog, db_schema, table_name, approximate)
+        catalog::get_statistics(&self.state, catalog, db_schema, table_name, approximate)
     }
 
     fn commit(&mut self) -> Result<()> {

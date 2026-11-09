@@ -26,12 +26,13 @@
 //! any transaction already open on the connection.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use adbc_core::error::{Result, Status};
 use adbc_core::options::IngestMode;
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
-use oracledb::{BindParameters, Connection};
+use oracledb::Connection;
 
 use crate::connection::ConnState;
 use crate::error::{error, from_oracle};
@@ -100,70 +101,55 @@ fn resolve_name(schema: Option<&str>, table: &str) -> Result<TableName> {
     })
 }
 
-/// Checks that `oracledb` can bind every column, before any DDL runs.
+/// Checks that every column can be bound and stored, before any DDL runs.
 fn validate_bindable(schema: &Schema) -> Result<()> {
-    use DataType::*;
-    for field in schema.fields() {
-        let ok = matches!(
-            field.data_type(),
-            Null | Boolean
-                | Int8
-                | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float16
-                | Float32
-                | Float64
-                | Decimal128(_, _)
-                | Date32
-                | Date64
-                | Timestamp(_, _)
-                | Utf8
-                | LargeUtf8
-                | Utf8View
-                | Binary
-                | LargeBinary
-                | BinaryView
-                | FixedSizeBinary(_)
-        );
-        if !ok {
-            let hint = match field.data_type() {
-                Decimal256(_, _) => "cast it to Decimal128 (Oracle NUMBER holds at most 38 digits)",
-                Dictionary(_, _) => "cast it to its value type",
-                _ => "cast it to a supported type",
-            };
-            return Err(error(
-                format!(
-                    "cannot ingest column {:?} of Arrow type {:?}; {hint}",
-                    field.name(),
-                    field.data_type()
-                ),
-                Status::NotImplemented,
-            ));
-        }
-        if let Decimal128(precision, _) = field.data_type() {
-            if *precision > 38 {
-                return Err(error(
-                    format!(
-                        "column {:?} has precision {precision}; Oracle NUMBER holds at most 38 digits",
-                        field.name()
-                    ),
-                    Status::InvalidArguments,
-                ));
-            }
-        }
-    }
     if schema.fields().is_empty() {
         return Err(error(
             "cannot ingest a batch with no columns",
             Status::InvalidArguments,
         ));
     }
+    for field in schema.fields() {
+        let data_type = field.data_type();
+        let precision = match data_type {
+            DataType::Decimal128(p, _) | DataType::Decimal256(p, _) => Some(*p),
+            _ => None,
+        };
+        if precision.is_some_and(|p| p > 38) {
+            return Err(error(
+                format!(
+                    "column {:?} has precision {}; Oracle NUMBER holds at most 38 digits",
+                    field.name(),
+                    precision.unwrap_or_default()
+                ),
+                Status::InvalidArguments,
+            ));
+        }
+        if !crate::params::row_bindable(data_type) {
+            let hint = match data_type {
+                DataType::Dictionary(_, _) => "cast it to its value type",
+                DataType::FixedSizeList(_, _) | DataType::List(_) | DataType::LargeList(_) => {
+                    "lists are stored as VECTOR and need Float32, Float64, Int8 or UInt8 elements"
+                }
+                _ => "cast it to a supported type",
+            };
+            return Err(error(
+                format!(
+                    "cannot ingest column {:?} of Arrow type {data_type:?}; {hint}",
+                    field.name()
+                ),
+                Status::NotImplemented,
+            ));
+        }
+    }
     Ok(())
+}
+
+fn is_vector_item(item: &arrow_schema::FieldRef) -> bool {
+    matches!(
+        item.data_type(),
+        DataType::Float32 | DataType::Float64 | DataType::Int8 | DataType::UInt8
+    )
 }
 
 fn ddl_type(data_type: &DataType, native_boolean: bool) -> String {
@@ -176,7 +162,33 @@ fn ddl_type(data_type: &DataType, native_boolean: bool) -> String {
         UInt64 => "NUMBER(20)".into(),
         Float16 | Float32 => "BINARY_FLOAT".into(),
         Float64 => "BINARY_DOUBLE".into(),
-        Decimal128(precision, scale) => format!("NUMBER({precision},{scale})"),
+        Decimal128(precision, scale) | Decimal256(precision, scale) => {
+            format!("NUMBER({precision},{scale})")
+        }
+        Duration(unit) => format!(
+            "INTERVAL DAY(9) TO SECOND({})",
+            match unit {
+                TimeUnit::Second => 0,
+                TimeUnit::Millisecond => 3,
+                TimeUnit::Microsecond => 6,
+                TimeUnit::Nanosecond => 9,
+            }
+        ),
+        Interval(_) => "INTERVAL YEAR(9) TO MONTH".into(),
+        FixedSizeList(item, _) | List(item) | LargeList(item) if is_vector_item(item) => {
+            let dims = match data_type {
+                FixedSizeList(_, n) if item.data_type() == &UInt8 => (n * 8).to_string(),
+                FixedSizeList(_, n) => n.to_string(),
+                _ => "*".into(),
+            };
+            let format = match item.data_type() {
+                Float32 => "FLOAT32",
+                Float64 => "FLOAT64",
+                Int8 => "INT8",
+                _ => "BINARY",
+            };
+            format!("VECTOR({dims}, {format})")
+        }
         Utf8 | Utf8View => "VARCHAR2(4000)".into(),
         LargeUtf8 => "CLOB".into(),
         Binary | BinaryView => "RAW(2000)".into(),
@@ -389,7 +401,9 @@ fn insert_sql(name: &TableName, schema: &Schema, columns: &[String]) -> String {
             // oracledb binds Arrow timestamps as their UTC wall-clock time;
             // FROM_TZ pins that to UTC so the stored instant is correct
             // regardless of the session time zone.
-            DataType::Timestamp(_, Some(_)) => format!("FROM_TZ(:{}, 'UTC')", i + 1),
+            DataType::Timestamp(_, Some(_)) => {
+                format!("FROM_TZ(CAST(:{} AS TIMESTAMP(9)), 'UTC')", i + 1)
+            }
             _ => format!(":{}", i + 1),
         })
         .collect();
@@ -426,9 +440,8 @@ fn insert_all(
             let mut offset = 0;
             while offset < rows {
                 let len = chunk_rows.min(rows - offset);
-                conn.execute_batch(sql, BindParameters::Arrow(batch.slice(offset, len)))
-                    .map_err(|e| {
-                        let mut err = from_oracle(e);
+                crate::params::execute_chunk(conn, sql, batch.slice(offset, len)).map_err(
+                    |mut err| {
                         err.message = format!(
                             "inserting rows {}..{} failed: {}",
                             total + offset,
@@ -436,7 +449,8 @@ fn insert_all(
                             err.message
                         );
                         err
-                    })?;
+                    },
+                )?;
                 offset += len;
             }
             total += rows;
@@ -512,12 +526,34 @@ pub(crate) fn ingest(
     let existing = existing_schema(state, &name)?;
     let conn = state.lock()?;
     let native_boolean = conn.version().map_err(from_oracle)?.0 >= 23;
+    // The INSERT lists VECTOR columns last: oracledb corrupts binds that
+    // follow a VECTOR bind (see params::vector_as_text), so this keeps every
+    // vector on the native bind path. The table keeps the batch's column
+    // order.
+    let order: Vec<usize> = (0..schema.fields().len())
+        .filter(|&i| !crate::params::is_vector(schema.field(i).data_type()))
+        .chain(
+            (0..schema.fields().len())
+                .filter(|&i| crate::params::is_vector(schema.field(i).data_type())),
+        )
+        .collect();
+    let insert_schema: SchemaRef = Arc::new(
+        schema
+            .project(&order)
+            .map_err(|e| error(e.to_string(), Status::Internal))?,
+    );
+    let insert_columns: Vec<String> = order.iter().map(|&i| columns[i].clone()).collect();
     let insert = |target: &TableName, batches: &mut dyn Iterator<Item = Result<RecordBatch>>| {
+        let mut projected = batches.map(|batch| {
+            batch?
+                .project(&order)
+                .map_err(|e| error(e.to_string(), Status::Internal))
+        });
         insert_all(
             &conn,
-            &insert_sql(target, &schema, &columns),
-            &schema,
-            batches,
+            &insert_sql(target, &insert_schema, &insert_columns),
+            &insert_schema,
+            &mut projected,
             chunk_rows,
         )
     };
@@ -607,7 +643,7 @@ mod tests {
     fn rejects_unbindable_types_before_ddl() {
         let schema = Schema::new(vec![Field::new("d", DataType::Decimal256(50, 0), true)]);
         let err = validate_bindable(&schema).unwrap_err();
-        assert!(err.message.contains("Decimal128"), "{}", err.message);
+        assert!(err.message.contains("38 digits"), "{}", err.message);
         let schema = Schema::new(vec![Field::new(
             "d",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -639,7 +675,7 @@ mod tests {
         let name = resolve_name(None, "t").unwrap();
         assert_eq!(
             insert_sql(&name, &schema, &columns),
-            "INSERT INTO \"T\" (\"A\", \"B\") VALUES (FROM_TZ(:1, 'UTC'), :2)"
+            "INSERT INTO \"T\" (\"A\", \"B\") VALUES (FROM_TZ(CAST(:1 AS TIMESTAMP(9)), 'UTC'), :2)"
         );
     }
 

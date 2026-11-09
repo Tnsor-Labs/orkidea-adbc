@@ -34,6 +34,18 @@ impl OracleDatabase {
                 .set_call_timeout(Some(std::time::Duration::from_millis(timeout_ms as u64)))
                 .map_err(from_oracle)?;
         }
+        if let Some(edition) = self.options.get_string(crate::config::OPT_EDITION)? {
+            let name = oracledb::enquote_name(&edition, true).map_err(from_oracle)?;
+            connection
+                .execute(&format!("ALTER SESSION SET EDITION = {name}"), &[])
+                .map_err(from_oracle)?;
+        }
+        if let Some(zone) = self.options.get_string(crate::config::OPT_TIME_ZONE)? {
+            let literal = oracledb::enquote_literal(&zone);
+            connection
+                .execute(&format!("ALTER SESSION SET TIME_ZONE = {literal}"), &[])
+                .map_err(from_oracle)?;
+        }
         Ok(connection)
     }
 }
@@ -47,7 +59,16 @@ impl Optionable for OracleDatabase {
 
     fn get_option_string(&self, key: Self::Option) -> Result<String> {
         let key = key.as_ref();
+        if crate::config::SECRET_OPTIONS.contains(&key) {
+            return Err(error(
+                format!("option {key:?} is write-only"),
+                Status::NotFound,
+            ));
+        }
         match self.options.get(key) {
+            Some(OptionValue::String(v)) if key == crate::config::OPT_URI => {
+                Ok(crate::config::redact_uri(v))
+            }
             Some(OptionValue::String(v)) => Ok(v.clone()),
             Some(other) => Err(error(
                 format!("option {key:?} does not hold a string: {other:?}"),

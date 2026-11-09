@@ -24,6 +24,10 @@ ORKIDEA_ADBC_URI='oracle://user:password@host:1521/service' \
   cargo test --workspace
 ```
 
+`catalog_live` covers `get_objects` at every depth, column metadata,
+constraints, filters, optimizer statistics, and the catalog option. It
+creates and drops `ORKIDEA_C_*` objects and gathers statistics on them.
+
 `ingest_live` covers every ingest mode, rollback on failure, safe `replace`,
 global and private temporary tables, streaming `bind_stream`, time-zone
 handling, and Oracle name resolution. It creates and drops tables named

@@ -22,6 +22,7 @@
 //! C ABI so it can be loaded by the ADBC driver manager from Python, C/C++,
 //! Go, R, and any other ADBC client.
 
+mod catalog;
 mod config;
 mod connection;
 mod convert;
@@ -49,6 +50,7 @@ pub const DRIVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Arrow implementation version used by this build.
 pub const ARROW_VERSION: &str = "59.3.2";
 
+pub use params::ORACLE_BIND_TYPE_KEY;
 pub use types::ORACLE_TYPE_NAME_KEY;
 
 #[cfg(test)]

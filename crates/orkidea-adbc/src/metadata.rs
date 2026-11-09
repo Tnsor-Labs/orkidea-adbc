@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use adbc_core::error::{Result, Status};
-use adbc_core::options::{InfoCode, ObjectDepth};
+use adbc_core::options::InfoCode;
 use arrow_array::{
     new_empty_array, ArrayRef, BooleanArray, Int64Array, RecordBatch, RecordBatchIterator,
     RecordBatchReader, StringArray, UnionArray,
@@ -194,18 +194,6 @@ pub(crate) fn get_info(
     Ok(Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema)))
 }
 
-pub(crate) fn get_objects(
-    _state: &ConnState,
-    _depth: ObjectDepth,
-    _catalog: Option<&str>,
-    _db_schema: Option<&str>,
-    _table_name: Option<&str>,
-    _table_type: Option<Vec<&str>>,
-    _column_name: Option<&str>,
-) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
-    Ok(empty_reader(objects_schema()))
-}
-
 pub(crate) fn get_table_schema(
     state: &ConnState,
     _catalog: Option<&str>,
@@ -237,7 +225,12 @@ pub(crate) fn get_table_types() -> Result<Box<dyn RecordBatchReader + Send + 'st
     )]));
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(StringArray::from(vec!["TABLE", "VIEW"]))],
+        vec![Arc::new(StringArray::from(vec![
+            "TABLE",
+            "VIEW",
+            "MATERIALIZED VIEW",
+            "TEMPORARY TABLE",
+        ]))],
     )?;
     Ok(Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema)))
 }
@@ -247,119 +240,6 @@ pub(crate) fn get_statistic_names() -> Result<Box<dyn RecordBatchReader + Send +
         Field::new("statistic_name", DataType::Utf8, false),
         Field::new("statistic_key", DataType::Int16, false),
     ]))))
-}
-
-pub(crate) fn get_statistics(
-    _catalog: Option<&str>,
-    _db_schema: Option<&str>,
-    _table_name: Option<&str>,
-    _approximate: bool,
-) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
-    Ok(empty_reader(statistics_schema()))
-}
-
-fn list_type(item: DataType) -> DataType {
-    DataType::List(Arc::new(Field::new("item", item, true)))
-}
-
-fn objects_schema() -> SchemaRef {
-    let usage = DataType::Struct(
-        vec![
-            Field::new("fk_catalog", DataType::Utf8, true),
-            Field::new("fk_db_schema", DataType::Utf8, true),
-            Field::new("fk_table", DataType::Utf8, false),
-            Field::new("fk_column_name", DataType::Utf8, false),
-        ]
-        .into(),
-    );
-    let constraint = DataType::Struct(
-        vec![
-            Field::new("constraint_name", DataType::Utf8, true),
-            Field::new("constraint_type", DataType::Utf8, false),
-            Field::new("constraint_column_names", list_type(DataType::Utf8), false),
-            Field::new("constraint_column_usage", list_type(usage), true),
-        ]
-        .into(),
-    );
-    let column = DataType::Struct(
-        vec![
-            Field::new("column_name", DataType::Utf8, false),
-            Field::new("ordinal_position", DataType::Int32, true),
-            Field::new("remarks", DataType::Utf8, true),
-            Field::new("xdbc_data_type", DataType::Int16, true),
-            Field::new("xdbc_type_name", DataType::Utf8, true),
-            Field::new("xdbc_column_size", DataType::Int32, true),
-            Field::new("xdbc_decimal_digits", DataType::Int16, true),
-            Field::new("xdbc_num_prec_radix", DataType::Int16, true),
-            Field::new("xdbc_nullable", DataType::Int16, true),
-            Field::new("xdbc_column_def", DataType::Utf8, true),
-            Field::new("xdbc_sql_data_type", DataType::Int16, true),
-            Field::new("xdbc_datetime_sub", DataType::Int16, true),
-            Field::new("xdbc_char_octet_length", DataType::Int32, true),
-            Field::new("xdbc_is_nullable", DataType::Utf8, true),
-            Field::new("xdbc_scope_catalog", DataType::Utf8, true),
-            Field::new("xdbc_scope_schema", DataType::Utf8, true),
-            Field::new("xdbc_scope_table", DataType::Utf8, true),
-            Field::new("xdbc_is_autoincrement", DataType::Boolean, true),
-            Field::new("xdbc_is_generatedcolumn", DataType::Boolean, true),
-        ]
-        .into(),
-    );
-    let table = DataType::Struct(
-        vec![
-            Field::new("table_name", DataType::Utf8, false),
-            Field::new("table_type", DataType::Utf8, false),
-            Field::new("table_columns", list_type(column), true),
-            Field::new("table_constraints", list_type(constraint), true),
-        ]
-        .into(),
-    );
-    let db_schema = DataType::Struct(
-        vec![
-            Field::new("db_schema_name", DataType::Utf8, true),
-            Field::new("db_schema_tables", list_type(table), true),
-        ]
-        .into(),
-    );
-    Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, true),
-        Field::new("catalog_db_schemas", list_type(db_schema), true),
-    ]))
-}
-
-fn statistics_schema() -> SchemaRef {
-    let value_fields = UnionFields::try_new(
-        [0, 1, 2, 3],
-        [
-            Field::new("int64", DataType::Int64, true),
-            Field::new("uint64", DataType::UInt64, true),
-            Field::new("float64", DataType::Float64, true),
-            Field::new("binary", DataType::Binary, true),
-        ],
-    )
-    .expect("static statistics union fields");
-    let value = DataType::Union(value_fields, UnionMode::Dense);
-    let statistic = DataType::Struct(
-        vec![
-            Field::new("table_name", DataType::Utf8, false),
-            Field::new("column_name", DataType::Utf8, true),
-            Field::new("statistic_key", DataType::Int16, false),
-            Field::new("statistic_value", value, false),
-            Field::new("statistic_is_approximate", DataType::Boolean, false),
-        ]
-        .into(),
-    );
-    let db_schema = DataType::Struct(
-        vec![
-            Field::new("db_schema_name", DataType::Utf8, true),
-            Field::new("db_schema_statistics", list_type(statistic), false),
-        ]
-        .into(),
-    );
-    Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, true),
-        Field::new("catalog_db_schemas", list_type(db_schema), false),
-    ]))
 }
 
 /// Normalises an identifier the way Oracle resolves names: a name that is

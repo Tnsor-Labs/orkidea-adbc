@@ -48,6 +48,15 @@ pub(crate) const OPT_CCLASS: &str = "oracle.cclass";
 pub(crate) const OPT_BATCH_SIZE: &str = "oracle.batch_size";
 pub(crate) const OPT_FETCH_ARRAY_SIZE: &str = "oracle.fetch_array_size";
 pub(crate) const OPT_PREFETCH_ROWS: &str = "oracle.prefetch_rows";
+pub(crate) const OPT_AUTH_MODE: &str = "oracle.auth_mode";
+pub(crate) const OPT_NEW_PASSWORD: &str = "oracle.new_password";
+pub(crate) const OPT_EDITION: &str = "oracle.edition";
+pub(crate) const OPT_TIME_ZONE: &str = "oracle.time_zone";
+pub(crate) const OPT_MODULE: &str = "oracle.module";
+pub(crate) const OPT_ACTION: &str = "oracle.action";
+pub(crate) const OPT_CLIENT_IDENTIFIER: &str = "oracle.client_identifier";
+pub(crate) const OPT_CLIENT_INFO: &str = "oracle.client_info";
+pub(crate) const OPT_DBOP: &str = "oracle.dbop";
 pub(crate) const OPT_UNCONSTRAINED_NUMBER: &str = "oracle.unconstrained_number";
 pub(crate) const OPT_UNCONSTRAINED_NUMBER_SCALE: &str = "oracle.unconstrained_number_scale";
 
@@ -71,7 +80,85 @@ const KNOWN_OPTIONS: &[&str] = &[
     OPT_PREFETCH_ROWS,
     OPT_UNCONSTRAINED_NUMBER,
     OPT_UNCONSTRAINED_NUMBER_SCALE,
+    OPT_AUTH_MODE,
+    OPT_NEW_PASSWORD,
+    OPT_EDITION,
+    OPT_TIME_ZONE,
+    OPT_MODULE,
+    OPT_ACTION,
+    OPT_CLIENT_IDENTIFIER,
+    OPT_CLIENT_INFO,
+    OPT_DBOP,
 ];
+
+/// Options whose values are never returned by `get_option` or echoed in
+/// error messages.
+pub(crate) const SECRET_OPTIONS: &[&str] = &[OPT_PASSWORD, OPT_WALLET_PASSWORD, OPT_NEW_PASSWORD];
+
+/// Tracing attributes, settable on the database (applied to every new
+/// connection) and on a connection.
+pub(crate) const TRACING_OPTIONS: &[&str] = &[
+    OPT_MODULE,
+    OPT_ACTION,
+    OPT_CLIENT_IDENTIFIER,
+    OPT_CLIENT_INFO,
+    OPT_DBOP,
+];
+
+/// Parses `oracle.auth_mode`.
+pub(crate) fn auth_mode(value: &str) -> Result<u8> {
+    Ok(match value.trim().to_ascii_lowercase().as_str() {
+        "default" | "" => oracledb::AUTH_MODE_DEFAULT,
+        "sysdba" => oracledb::AUTH_MODE_SYSDBA,
+        "sysoper" => oracledb::AUTH_MODE_SYSOPER,
+        "sysasm" => oracledb::AUTH_MODE_SYSASM,
+        "sysbackup" | "sysbkp" => oracledb::AUTH_MODE_SYSBKP,
+        "sysdg" | "sysdgd" => oracledb::AUTH_MODE_SYSDGD,
+        "syskm" | "syskmt" => oracledb::AUTH_MODE_SYSKMT,
+        "sysrac" => oracledb::AUTH_MODE_SYSRAC,
+        other => {
+            return Err(error(
+                format!(
+                    "invalid {OPT_AUTH_MODE} {other:?}; expected default, sysdba, sysoper, \
+                     sysasm, sysbackup, sysdg, syskm, or sysrac"
+                ),
+                Status::InvalidArguments,
+            ))
+        }
+    })
+}
+
+/// Masks the password (and `wallet_password` parameter) of an `oracle://`
+/// URI.
+pub(crate) fn redact_uri(uri: &str) -> String {
+    let Some((scheme, rest)) = uri.split_once("://") else {
+        return uri.to_string();
+    };
+    let (main, query) = match rest.split_once('?') {
+        Some((m, q)) => (m, Some(q)),
+        None => (rest, None),
+    };
+    let main = match main.rsplit_once('@') {
+        Some((userinfo, host)) => match userinfo.split_once(':') {
+            Some((user, _)) => format!("{user}:***@{host}"),
+            None => format!("{userinfo}@{host}"),
+        },
+        None => main.to_string(),
+    };
+    let query = query.map(|q| {
+        q.split('&')
+            .map(|pair| match pair.split_once('=') {
+                Some((k, _)) if k.eq_ignore_ascii_case("wallet_password") => format!("{k}=***"),
+                _ => pair.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("&")
+    });
+    match query {
+        Some(q) => format!("{scheme}://{main}?{q}"),
+        None => format!("{scheme}://{main}"),
+    }
+}
 
 /// Database-level options as provided through the ADBC option API.
 #[derive(Clone, Default)]
@@ -109,6 +196,17 @@ impl DbOptions {
             }
             OPT_UNCONSTRAINED_NUMBER => {
                 expect_string(&value, key)?.parse::<UnconstrainedNumber>()?;
+            }
+            OPT_AUTH_MODE => {
+                auth_mode(&expect_string(&value, key)?)?;
+            }
+            _ if SECRET_OPTIONS.contains(&key) => {
+                if !matches!(value, OptionValue::String(_)) {
+                    return Err(error(
+                        format!("option {key:?} expects a string"),
+                        Status::InvalidArguments,
+                    ));
+                }
             }
             OPT_UNCONSTRAINED_NUMBER_SCALE => {
                 validate_number_scale(expect_int(&value, key)?)?;
@@ -209,7 +307,11 @@ impl DbOptions {
             .or(parsed.connect_timeout_ms);
 
         let mut config = oracledb::Config::default();
-        config = config.set_driver_name(crate::DRIVER_NAME);
+        config = config.set_driver_name(format!(
+            "{} : {}",
+            crate::DRIVER_NAME,
+            crate::DRIVER_VERSION
+        ));
         config = config
             .set_program(crate::DRIVER_NAME)
             .map_err(from_oracle)?;
@@ -239,6 +341,13 @@ impl DbOptions {
         }
         if let Some(cclass) = self.get_string(OPT_CCLASS)? {
             config = config.set_cclass(cclass);
+        }
+
+        if let Some(mode) = self.get_string(OPT_AUTH_MODE)? {
+            config = config.set_auth_mode(auth_mode(&mode)?);
+        }
+        if let Some(new_password) = self.get_string(OPT_NEW_PASSWORD)? {
+            config = config.set_new_password(&new_password);
         }
 
         config = config
@@ -492,6 +601,23 @@ mod tests {
         assert!(cs.contains("PORT=1522"));
         assert!(cs.contains("SERVICE_NAME=FREEPDB1"));
         assert!(cs.contains("PROTOCOL=TCP"));
+    }
+
+    #[test]
+    fn redacts_secrets_in_uris() {
+        assert_eq!(
+            redact_uri("oracle://scott:tiger@db:1521/svc?wallet_password=x&stmt_cache_size=5"),
+            "oracle://scott:***@db:1521/svc?wallet_password=***&stmt_cache_size=5"
+        );
+        assert_eq!(redact_uri("oracle://db:1521/svc"), "oracle://db:1521/svc");
+        assert_eq!(redact_uri("mydb_high"), "mydb_high");
+    }
+
+    #[test]
+    fn auth_modes() {
+        assert_eq!(auth_mode("SYSDBA").unwrap(), oracledb::AUTH_MODE_SYSDBA);
+        assert_eq!(auth_mode("sysbackup").unwrap(), oracledb::AUTH_MODE_SYSBKP);
+        assert!(auth_mode("root").is_err());
     }
 
     #[test]

@@ -12,7 +12,7 @@
 
 //! Streaming Oracle → Arrow result reader.
 //!
-//! Rows are pulled from an `oracledb` cursor (which fetches
+//! Rows are pulled from `oracledb` row sources: query cursors (which fetch
 //! `fetch_array_size` rows per round trip) and appended to per-column Arrow
 //! builders; a `RecordBatch` is emitted every `batch_size` rows. Memory use is
 //! bounded by one batch regardless of the size of the result set.
@@ -363,11 +363,32 @@ fn with_column(err: adbc_core::error::Error, column: &str) -> adbc_core::error::
     err
 }
 
-/// Source of result cursors: a single execution, or one execution per row of
-/// bound parameters (ADBC semantics for binding a multi-row batch to a query).
-pub(crate) trait CursorSource: Send {
-    /// Returns the next cursor, or `None` when all executions are done.
-    fn next_cursor(&mut self) -> Result<Option<Cursor>>;
+/// A stream of result rows: a query cursor, a REF CURSOR returned by PL/SQL,
+/// or rows already returned by an execution (OUT binds, DML RETURNING).
+pub(crate) type Rows = Box<dyn Iterator<Item = std::result::Result<Row, oracledb::Error>> + Send>;
+
+pub(crate) fn cursor_rows(cursor: Cursor) -> Rows {
+    Box::new(cursor)
+}
+
+pub(crate) fn fetched_rows(rows: Vec<Row>) -> Rows {
+    Box::new(rows.into_iter().map(Ok))
+}
+
+/// Supplies further row streams once the current one is exhausted: one per
+/// execution when a multi-row parameter batch is bound.
+pub(crate) trait RowSource: Send {
+    /// Returns the next stream, or `None` when all executions are done.
+    fn next_rows(&mut self) -> Result<Option<Rows>>;
+}
+
+/// A fixed sequence of row streams.
+pub(crate) struct QueuedRows(pub(crate) std::collections::VecDeque<Rows>);
+
+impl RowSource for QueuedRows {
+    fn next_rows(&mut self) -> Result<Option<Rows>> {
+        Ok(self.0.pop_front())
+    }
 }
 
 /// Streams a query result as Arrow record batches.
@@ -376,8 +397,8 @@ pub(crate) struct OracleBatchReader {
     plans: Vec<ColumnPlan>,
     builders: Vec<ColumnBuilder>,
     batch_size: usize,
-    cursor: Option<Cursor>,
-    source: Box<dyn CursorSource>,
+    rows: Option<Rows>,
+    source: Box<dyn RowSource>,
     finished: bool,
 }
 
@@ -385,8 +406,8 @@ impl OracleBatchReader {
     pub(crate) fn new(
         schema: SchemaRef,
         plans: Vec<ColumnPlan>,
-        first: Option<Cursor>,
-        source: Box<dyn CursorSource>,
+        first: Option<Rows>,
+        source: Box<dyn RowSource>,
         batch_size: usize,
     ) -> Result<Self> {
         let batch_size = batch_size.max(1);
@@ -400,19 +421,24 @@ impl OracleBatchReader {
             builders,
             batch_size,
             finished: first.is_none(),
-            cursor: first,
+            rows: first,
             source,
         })
     }
 
+    /// A reader with no rows.
+    pub(crate) fn empty(schema: SchemaRef, plans: Vec<ColumnPlan>) -> Result<Self> {
+        Self::new(schema, plans, None, Box::new(NoMoreRows), 1)
+    }
+
     fn next_row(&mut self) -> Result<Option<Row>> {
         loop {
-            let Some(cursor) = self.cursor.as_mut() else {
+            let Some(rows) = self.rows.as_mut() else {
                 return Ok(None);
             };
-            match cursor.next() {
+            match rows.next() {
                 Some(row) => return row.map(Some).map_err(from_oracle),
-                None => self.cursor = self.source.next_cursor()?,
+                None => self.rows = self.source.next_rows()?,
             }
         }
     }
@@ -458,7 +484,7 @@ impl Iterator for OracleBatchReader {
             Err(e) => {
                 // Stop after an error; release the cursor.
                 self.finished = true;
-                self.cursor = None;
+                self.rows = None;
                 Some(Err(ArrowError::ExternalError(Box::new(e))))
             }
         }
@@ -471,11 +497,11 @@ impl RecordBatchReader for OracleBatchReader {
     }
 }
 
-/// A source that yields no further cursors.
-pub(crate) struct NoMoreCursors;
+/// A source that yields no further rows.
+pub(crate) struct NoMoreRows;
 
-impl CursorSource for NoMoreCursors {
-    fn next_cursor(&mut self) -> Result<Option<Cursor>> {
+impl RowSource for NoMoreRows {
+    fn next_rows(&mut self) -> Result<Option<Rows>> {
         Ok(None)
     }
 }

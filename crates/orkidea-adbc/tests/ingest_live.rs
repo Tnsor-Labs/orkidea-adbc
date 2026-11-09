@@ -494,7 +494,7 @@ fn unbindable_types_fail_before_any_ddl() {
     )
     .unwrap();
     let err = ingest(&mut conn, IngestMode::Create, table, batch).unwrap_err();
-    assert_eq!(err.status, Status::NotImplemented);
+    assert_eq!(err.status, Status::InvalidArguments);
     assert!(!table_exists(&mut conn, table));
 }
 
@@ -589,5 +589,122 @@ fn statement_switches_from_ingest_to_query() {
         .unwrap();
     assert_eq!(batches[0].num_rows(), 1);
     drop(stmt);
+    drop_table(&mut conn, table);
+}
+
+/// Vectors, durations and intervals use the row-bind path (one round trip
+/// per chunk) and get matching Oracle column types.
+#[test]
+fn ingests_vectors_and_intervals() {
+    use arrow_array::types::{DurationMicrosecondType, Float32Type, IntervalYearMonthType};
+    use arrow_array::Array;
+    use arrow_array::{
+        DurationMicrosecondArray, FixedSizeListArray, Float32Array, IntervalYearMonthArray,
+    };
+    let Some(mut conn) = connect() else { return };
+    let table = "ORKIDEA_I_VECTORS";
+    drop_table(&mut conn, table);
+    let item = Arc::new(Field::new("item", DataType::Float32, false));
+    let embeddings = FixedSizeListArray::try_new(
+        item.clone(),
+        3,
+        Arc::new(Float32Array::from(vec![
+            1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 4.0, 5.0, 6.0,
+        ])),
+        Some(vec![true, false, true].into()),
+    )
+    .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("embedding", DataType::FixedSizeList(item, 3), true),
+            Field::new("elapsed", DataType::Duration(TimeUnit::Microsecond), true),
+            Field::new(
+                "term",
+                DataType::Interval(arrow_schema::IntervalUnit::YearMonth),
+                true,
+            ),
+        ])),
+        vec![
+            Arc::new(embeddings) as ArrayRef,
+            Arc::new(DurationMicrosecondArray::from(vec![
+                Some(90_061_500_000),
+                None,
+                Some(-1),
+            ])) as ArrayRef,
+            Arc::new(IntervalYearMonthArray::from(vec![Some(27), Some(-3), None])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        ingest(&mut conn, IngestMode::Create, table, batch).unwrap(),
+        Some(3)
+    );
+
+    let declared = conn.get_table_schema(None, None, table).unwrap();
+    let type_name = |name: &str| {
+        declared
+            .field_with_name(name)
+            .unwrap()
+            .metadata()
+            .get(orkidea_adbc::ORACLE_TYPE_NAME_KEY)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(type_name("EMBEDDING"), "VECTOR(3,float32)");
+    assert!(type_name("ELAPSED").starts_with("INTERVAL DAY(9) TO SECOND(6)"));
+    assert!(type_name("TERM").starts_with("INTERVAL YEAR(9) TO MONTH"));
+
+    let (_, batches) = query(&mut conn, &format!("SELECT * FROM {table}"));
+    let b = &batches[0];
+    let vectors = b.column(0).as_fixed_size_list();
+    assert!(vectors.is_null(1));
+    let first = vectors.value(0);
+    assert_eq!(
+        first.as_primitive::<Float32Type>().values().as_ref(),
+        &[1.0, 2.0, 3.0]
+    );
+    let elapsed = b.column(1).as_primitive::<DurationMicrosecondType>();
+    assert_eq!(elapsed.value(0), 90_061_500_000);
+    assert!(elapsed.is_null(1));
+    assert_eq!(elapsed.value(2), -1);
+    let term = b.column(2).as_primitive::<IntervalYearMonthType>();
+    assert_eq!((term.value(0), term.value(1)), (27, -3));
+    drop_table(&mut conn, table);
+}
+
+/// Named placeholders bind parameters by field name, in any order.
+#[test]
+fn dml_binds_by_name_when_names_match() {
+    let Some(mut conn) = connect() else { return };
+    let table = "ORKIDEA_I_NAMED";
+    drop_table(&mut conn, table);
+    exec(
+        &mut conn,
+        &format!("CREATE TABLE {table} (id NUMBER(10), name VARCHAR2(20))"),
+    );
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query(format!(
+        "INSERT INTO {table} (id, name) VALUES (:id, :name)"
+    ))
+    .unwrap();
+    // Fields deliberately in the opposite order of the placeholders.
+    stmt.bind(
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("id", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+            ],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stmt.execute_update().unwrap(), Some(2));
+    drop(stmt);
+    let row = single_row(&mut conn, &format!("SELECT name FROM {table} WHERE id = 2"));
+    assert_eq!(row.column(0).as_string::<i32>().value(0), "y");
     drop_table(&mut conn, table);
 }

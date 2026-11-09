@@ -401,7 +401,7 @@ fn write_json(out: &mut String, value: &JsonValue) {
     }
 }
 
-fn write_vector(out: &mut String, vector: &oracledb::Vector) {
+pub(crate) fn write_vector(out: &mut String, vector: &oracledb::Vector) {
     use oracledb::{Vector, VectorData};
     fn list<T: std::fmt::Display>(out: &mut String, items: &[T]) {
         out.push('[');

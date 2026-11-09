@@ -82,14 +82,17 @@ SQL workaround, for example `XMLSERIALIZE(CONTENT col AS CLOB)` for `XMLTYPE`.
 ## Query parameters (Arrow → Oracle)
 
 A batch bound to a query is executed once per row, and the results are
-concatenated. Supported parameter types:
+concatenated. Parameters bind by name when every placeholder name matches a
+field name, otherwise by position; see [plsql.md](plsql.md#binding-parameters).
+Supported parameter types:
 
 - integers, floats, `Boolean`, `Decimal128`/`Decimal256`
 - `Utf8`, `LargeUtf8`, `Utf8View`
 - `Binary`, `LargeBinary`, `BinaryView`, `FixedSizeBinary`
 - `Date32`, `Date64`, `Timestamp`
 - `Duration` (as `INTERVAL DAY TO SECOND`) and `Interval(YearMonth)`
-- `Null`
+- `FixedSizeList` / `List` of `Float32`, `Float64`, `Int8`, `UInt8` (as `VECTOR`)
+- `Null`, optionally typed with `oracle.bind_type` field metadata
 
 Timestamps are bound as their UTC wall-clock value. A zone-aware Arrow
 timestamp compared with a `TIMESTAMP WITH TIME ZONE` column is therefore
@@ -157,11 +160,18 @@ inserted, as ADBC specifies.
 | `Date32`, `Date64` | `DATE` |
 | `Timestamp(unit)` | `TIMESTAMP(0/3/6/9)` |
 | `Timestamp(unit, tz)` | `TIMESTAMP(0/3/6/9) WITH TIME ZONE` |
+| `Duration(unit)` | `INTERVAL DAY(9) TO SECOND(0/3/6/9)` |
+| `Interval(YearMonth)` | `INTERVAL YEAR(9) TO MONTH` |
+| `FixedSizeList<Float32/Float64/Int8>(n)` | `VECTOR(n, FLOAT32/FLOAT64/INT8)` |
+| `FixedSizeList<UInt8>(n)` | `VECTOR(n × 8, BINARY)` |
+| `List<...>` of those types | `VECTOR(*, ...)` |
 
 Zone-aware timestamps are inserted through `FROM_TZ(..., 'UTC')`, so the
-stored instant is correct whatever the session time zone. `Decimal256`,
-dictionary, interval, duration, and nested types are rejected before any DDL.
-Cast them first; dictionary columns, for example, to their value type.
+stored instant is correct whatever the session time zone. Columns the Arrow
+bind path cannot carry (vectors, intervals, durations) are bound row by row
+but still sent in one round trip per chunk. Decimals above 38 digits,
+dictionary columns, and other nested types are rejected before any DDL; cast
+them first.
 
 ## Fetch tuning
 

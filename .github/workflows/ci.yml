@@ -44,7 +44,9 @@ jobs:
             -e ORACLE_PASSWORD="${password}" \
             -e APP_USER=orkidea_test -e APP_USER_PASSWORD="${password}" \
             "${ORACLE_IMAGE}"
+          echo "ORACLE_ADMIN_PASSWORD=${password}" >> "${GITHUB_ENV}"
           echo "ORKIDEA_ADBC_URI=oracle://orkidea_test:${password}@127.0.0.1:1521/FREEPDB1" >> "${GITHUB_ENV}"
+          echo "ORKIDEA_ADBC_ADMIN_URI=oracle://sys:${password}@127.0.0.1:1521/FREEPDB1" >> "${GITHUB_ENV}"
       - name: Build tests while the database starts
         run: cargo test --workspace --locked --no-run
       - name: Wait for the database
@@ -57,6 +59,14 @@ jobs:
           done
           docker logs oracle 2>&1 | tail -50
           exit 1
+      - name: Grant test privileges
+        run: |
+          docker exec -i oracle sqlplus -s -L "sys/${ORACLE_ADMIN_PASSWORD}@FREEPDB1 as sysdba" <<'SQL'
+          WHENEVER SQLERROR EXIT FAILURE
+          GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE PROCEDURE,
+                CREATE MATERIALIZED VIEW, CREATE SEQUENCE TO orkidea_test;
+          ALTER USER orkidea_test QUOTA UNLIMITED ON USERS;
+          SQL
       - name: Run tests against Oracle
         run: cargo test --workspace --locked
 
