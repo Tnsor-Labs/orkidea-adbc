@@ -362,24 +362,34 @@ fn statistics_schema() -> SchemaRef {
     ]))
 }
 
+/// Normalises an identifier the way Oracle resolves names: a name that is
+/// valid unquoted (`customers`) is upper-cased (`CUSTOMERS`), so it can be
+/// queried without quotes; any other name (`Mixed Case`) is kept verbatim, as
+/// a quoted identifier. Embedded double quotes are rejected.
+pub(crate) fn normalize_identifier(value: &str, what: &str) -> Result<String> {
+    if value.trim().is_empty() {
+        return Err(error(
+            format!("{what} must not be empty"),
+            Status::InvalidArguments,
+        ));
+    }
+    let simple = oracledb::is_simple_sql_name(value);
+    let quoted = oracledb::enquote_name(if simple { value.trim() } else { value }, simple)
+        .map_err(from_oracle)?;
+    Ok(quoted[1..quoted.len() - 1].to_string())
+}
+
 fn qualified_name(schema: Option<&str>, table: &str) -> Result<String> {
     let (schema, table) = match (schema, table.rsplit_once('.')) {
         (Some(schema), _) => (Some(schema), table),
         (None, Some((schema, table))) => (Some(schema), table),
         (None, None) => (None, table),
     };
-    let table = oracledb::enquote_name(table, true).map_err(from_oracle)?;
-    if table == "\"\"" {
-        return Err(error(
-            "table name must not be empty",
-            Status::InvalidArguments,
-        ));
-    }
+    let table = format!("\"{}\"", normalize_identifier(table, "table name")?);
     match schema {
         Some(schema) => Ok(format!(
-            "{}.{}",
-            oracledb::enquote_name(schema, true).map_err(from_oracle)?,
-            table
+            "\"{}\".{table}",
+            normalize_identifier(schema, "schema name")?
         )),
         None => Ok(table),
     }

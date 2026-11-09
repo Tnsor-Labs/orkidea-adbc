@@ -24,6 +24,11 @@ ORKIDEA_ADBC_URI='oracle://user:password@host:1521/service' \
   cargo test --workspace
 ```
 
+`ingest_live` covers every ingest mode, rollback on failure, safe `replace`,
+global and private temporary tables, streaming `bind_stream`, time-zone
+handling, and Oracle name resolution. It creates and drops tables named
+`ORKIDEA_I_*`.
+
 `fetch_live` creates and drops tables named `ORKIDEA_T_*` and needs
 Oracle Database 23ai or later (BOOLEAN, JSON, and VECTOR columns). It covers
 streaming, every supported type mapping, historical dates checked against

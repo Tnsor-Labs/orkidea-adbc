@@ -96,6 +96,73 @@ timestamp compared with a `TIMESTAMP WITH TIME ZONE` column is therefore
 interpreted in the session time zone; normalise the session time zone to UTC
 when this matters.
 
+## Bulk ingestion (Arrow → Oracle)
+
+`adbc.ingest.mode` supports `create`, `append`, `create_append`, and `replace`.
+Data can be bound as one batch (`bind`) or as a stream (`bind_stream`).
+Streams are read batch by batch while rows are inserted, never all at once.
+Rows go to Oracle in array-DML chunks of `oracle.batch_size` rows.
+
+### Guarantees
+
+- **No partial ingests.** Rows are inserted under a savepoint. If any row
+  fails, every row of that ingest is rolled back, and the error names the
+  failing range (for example `inserting rows 8192..16384 failed: ORA-12899
+  ...`). An earlier transaction on the connection is not affected.
+- **No empty leftovers.** If `create` fails while loading, the table it just
+  created is dropped again, so a retry does not fail with "already exists".
+- **Safe `replace`.** The new data is loaded into a staging table first and
+  swapped in only once every row is loaded. If loading fails, the original
+  table and its data are untouched. The replaced table goes to the recycle
+  bin (`FLASHBACK TABLE ... TO BEFORE DROP`), not `PURGE`. Grants, indexes,
+  and triggers on the old table are not carried over, as with any
+  drop-and-recreate.
+- **Type checks first.** Arrow types are validated before any DDL runs.
+- Oracle DDL commits implicitly. `create` and `replace` therefore commit any
+  transaction already open on the connection, even with autocommit off.
+
+### Temporary tables
+
+With `adbc.ingest.temporary = true`:
+
+| Target table name | Oracle object | Lifetime |
+| --- | --- | --- |
+| Starts with `ORA$PTT_` | Private temporary table (18c+), `ON COMMIT PRESERVE DEFINITION` | Table and rows are private to the session and dropped when it ends. No LOB columns and no NOT NULL constraints (an Oracle restriction). |
+| Any other name | Global temporary table, `ON COMMIT PRESERVE ROWS` | Rows are private to the session and survive commits. The table definition is permanent. |
+
+### Column names and appends
+
+Table and column names follow Oracle's name resolution. A name that is valid
+unquoted (`customers`, `order_id`) is upper-cased, so it can be queried without
+quotes. Any other name (`Total Amount`) is kept exactly. `append` matches
+columns by these names, in any order. Table columns missing from the batch
+receive their defaults. A batch column the table lacks, or a type that cannot
+be stored in the target column, fails with `ALREADY_EXISTS` before any row is
+inserted, as ADBC specifies.
+
+### Column types for `create`
+
+| Arrow type | Oracle column |
+| --- | --- |
+| `Int8`/`UInt8`, `Int16`/`UInt16`, `Int32`/`UInt32` | `NUMBER(3)`, `NUMBER(5)`, `NUMBER(10)` |
+| `Int64`, `UInt64` | `NUMBER(19)`, `NUMBER(20)` |
+| `Float16`/`Float32`, `Float64` | `BINARY_FLOAT`, `BINARY_DOUBLE` |
+| `Decimal128(p, s)` | `NUMBER(p, s)` |
+| `Boolean` | `BOOLEAN` on 23ai and later, otherwise `NUMBER(1)` |
+| `Utf8`, `Utf8View` | `VARCHAR2(4000)` |
+| `LargeUtf8` | `CLOB` |
+| `Binary`, `BinaryView` | `RAW(2000)` |
+| `FixedSizeBinary(n)` | `RAW(n)`, or `BLOB` when n > 2000 |
+| `LargeBinary` | `BLOB` |
+| `Date32`, `Date64` | `DATE` |
+| `Timestamp(unit)` | `TIMESTAMP(0/3/6/9)` |
+| `Timestamp(unit, tz)` | `TIMESTAMP(0/3/6/9) WITH TIME ZONE` |
+
+Zone-aware timestamps are inserted through `FROM_TZ(..., 'UTC')`, so the
+stored instant is correct whatever the session time zone. `Decimal256`,
+dictionary, interval, duration, and nested types are rejected before any DDL.
+Cast them first; dictionary columns, for example, to their value type.
+
 ## Fetch tuning
 
 | Option | Default | Effect |

@@ -208,7 +208,8 @@ fn unsupported(col: &Metadata, hint: &str) -> adbc_core::error::Error {
 ///
 /// `Metadata::vector_dimensions` in oracledb 26.0.0-beta.5 tests the
 /// flexible-dimension flag the wrong way round (it returns `None` for fixed
-/// dimensions), so the type name is the reliable source.
+/// dimensions), so the type name is the reliable source. Remove once
+/// <https://github.com/oracle/rust-oracledb/issues/78> is fixed upstream.
 fn declared_vector_dimensions(col: &Metadata) -> Option<usize> {
     let name = col.data_type();
     let inner = name.strip_prefix("VECTOR(")?.strip_suffix(')')?;

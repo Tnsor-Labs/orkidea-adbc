@@ -49,8 +49,11 @@ covered by CI or release validation.
 - `get_objects` returns the standard ADBC schema but does not yet enumerate
   Oracle catalogs, schemas, tables, columns, or constraints
 - Schema discovery with `execute_schema`, matching `execute` exactly
-- Ingestion modes `create`, `append`, `create_append`, and `replace`
-- Arrow batch ingestion with Oracle transaction/autocommit handling
+- Bulk ingestion with `create`, `append`, `create_append`, and `replace`
+  from a batch or a stream. Ingests are all-or-nothing, `replace` swaps the
+  table in only after a complete load, and temporary ingests use Oracle
+  global or private temporary tables. See
+  [docs/type-support.md](docs/type-support.md#bulk-ingestion-arrow--oracle)
 - Oracle call timeouts through `oracle.call_timeout_ms`, plus fetch tuning
   through `oracle.fetch_array_size` and `oracle.prefetch_rows`
 

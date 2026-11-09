@@ -12,8 +12,8 @@
 
 use std::sync::Arc;
 
-use adbc_core::options::{OptionDatabase, OptionStatement, OptionValue};
-use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use adbc_core::options::OptionValue;
+use adbc_core::{Connection, Optionable, Statement};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Decimal128Type, DurationMicrosecondType, Float64Type, Int16Type, Int32Type, Int64Type,
@@ -21,85 +21,10 @@ use arrow_array::types::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{Array, Int64Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit};
-use orkidea_adbc::{OracleConnection, OracleDatabase, OracleDriver, ORACLE_TYPE_NAME_KEY};
+use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 
-fn database() -> Option<OracleDatabase> {
-    let Ok(uri) = std::env::var("ORKIDEA_ADBC_URI") else {
-        eprintln!("skipping live test: ORKIDEA_ADBC_URI is not set");
-        return None;
-    };
-    let mut database = OracleDriver.new_database().unwrap();
-    database
-        .set_option(OptionDatabase::Uri, uri.into())
-        .unwrap();
-    Some(database)
-}
-
-fn connect() -> Option<OracleConnection> {
-    database().map(|db| db.new_connection().unwrap())
-}
-
-fn statement_option(key: &str) -> OptionStatement {
-    OptionStatement::Other(key.to_string())
-}
-
-/// Executes `sql` and returns the schema and every batch.
-fn query(conn: &mut OracleConnection, sql: &str) -> (SchemaRef, Vec<RecordBatch>) {
-    query_with(conn, sql, &[])
-}
-
-fn query_with(
-    conn: &mut OracleConnection,
-    sql: &str,
-    options: &[(&str, OptionValue)],
-) -> (SchemaRef, Vec<RecordBatch>) {
-    let mut stmt = conn.new_statement().unwrap();
-    for (key, value) in options {
-        stmt.set_option(statement_option(key), value.clone())
-            .unwrap();
-    }
-    stmt.set_sql_query(sql).unwrap();
-    let reader = stmt.execute().unwrap();
-    let schema = reader.schema();
-    let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
-    (schema, batches)
-}
-
-fn single_row(conn: &mut OracleConnection, sql: &str) -> RecordBatch {
-    let (_, batches) = query(conn, sql);
-    assert_eq!(batches.len(), 1, "expected one batch for {sql}");
-    assert_eq!(batches[0].num_rows(), 1, "expected one row for {sql}");
-    batches[0].clone()
-}
-
-fn exec(conn: &mut OracleConnection, sql: &str) {
-    let mut stmt = conn.new_statement().unwrap();
-    stmt.set_sql_query(sql).unwrap();
-    stmt.execute_update().unwrap();
-}
-
-fn drop_table(conn: &mut OracleConnection, table: &str) {
-    exec(
-        conn,
-        &format!(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE {table} PURGE'; \
-             EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        ),
-    );
-}
-
-fn field<'a>(schema: &'a Schema, name: &str) -> &'a Field {
-    schema.field_with_name(name).unwrap()
-}
-
-fn type_name(schema: &Schema, name: &str) -> String {
-    field(schema, name)
-        .metadata()
-        .get(ORACLE_TYPE_NAME_KEY)
-        .cloned()
-        .unwrap_or_default()
-}
+mod common;
+use common::*;
 
 #[test]
 fn streams_large_results_in_bounded_batches() {
@@ -619,4 +544,33 @@ fn get_info_reports_server_version() {
         version.chars().next().is_some_and(|c| c.is_ascii_digit()) && version.contains('.'),
         "unexpected server version {version:?}"
     );
+}
+
+/// Oracle executes DDL at parse time; prepare must not run it.
+#[test]
+fn prepare_does_not_execute_ddl() {
+    let Some(mut conn) = connect() else { return };
+    let table = "ORKIDEA_T_PREPARE";
+    drop_table(&mut conn, table);
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query(format!("CREATE TABLE {table} (id NUMBER)"))
+        .unwrap();
+    stmt.prepare().unwrap();
+    let (_, batches) = query(
+        &mut conn,
+        &format!("SELECT table_name FROM user_tables WHERE table_name = '{table}'"),
+    );
+    assert!(
+        batches.iter().all(|b| b.num_rows() == 0),
+        "prepare created the table"
+    );
+    stmt.execute_update().unwrap();
+    drop(stmt);
+    drop_table(&mut conn, table);
+
+    // Queries are still validated on the server by prepare.
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT no_such_column FROM dual")
+        .unwrap();
+    assert_eq!(stmt.prepare().unwrap_err().vendor_code, 904);
 }

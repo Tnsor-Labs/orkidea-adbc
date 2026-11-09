@@ -10,300 +10,179 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Bulk ingestion (`adbc.ingest.*`) implemented with `oracledb`'s native Arrow
-//! bind path.
+//! Bulk ingestion (`adbc.ingest.*`) using `oracledb`'s Arrow array-DML bind
+//! path.
+//!
+//! Guarantees:
+//! - Every Arrow type is validated before any DDL runs.
+//! - Rows are inserted under a savepoint; a failure rolls back every row of
+//!   the ingest and drops a table the ingest itself created.
+//! - `replace` loads a staging table and swaps it in only after all rows are
+//!   loaded; the previous table goes to the recycle bin, not `PURGE`.
+//! - Bound streams are consumed chunk by chunk; memory is bounded by one
+//!   input batch.
+//!
+//! Oracle DDL commits implicitly, so creating or replacing a table commits
+//! any transaction already open on the connection.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use adbc_core::error::{Result, Status};
 use adbc_core::options::IngestMode;
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Schema, TimeUnit};
-use oracledb::BindParameters;
+use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
+use oracledb::{BindParameters, Connection};
 
 use crate::connection::ConnState;
 use crate::error::{error, from_oracle};
 use crate::metadata;
 
-/// Performs an ingest. Returns the number of rows inserted.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ingest(
-    state: &ConnState,
-    mode: IngestMode,
-    target_table: &str,
-    target_schema: Option<&str>,
-    temporary: bool,
-    batch: &RecordBatch,
-    batch_size: usize,
-) -> Result<i64> {
-    let schema = batch.schema();
-    let qualified = qualified_name(target_schema, target_table)?;
+const SAVEPOINT: &str = "ORKIDEA_INGEST";
+/// Oracle's default `PRIVATE_TEMP_TABLE_PREFIX`.
+const PRIVATE_TEMP_PREFIX: &str = "ORA$PTT_";
+const ORA_TABLE_NOT_FOUND: i32 = 942;
 
-    let existing = match metadata::get_table_schema(state, None, target_schema, target_table) {
-        Ok(schema) => Some(schema),
-        Err(err) if err.status == Status::NotFound => None,
-        Err(err) => return Err(err),
-    };
-
-    match mode {
-        IngestMode::Create => {
-            if existing.is_some() {
-                return Err(error(
-                    format!("table {qualified} already exists"),
-                    Status::AlreadyExists,
-                ));
-            }
-            create_table(state, &qualified, &schema, temporary)?;
-        }
-        IngestMode::Replace => {
-            if existing.is_some() {
-                drop_table(state, &qualified)?;
-            }
-            create_table(state, &qualified, &schema, temporary)?;
-        }
-        IngestMode::Append => {
-            let existing = existing.ok_or_else(|| {
-                error(
-                    format!("table {qualified} does not exist"),
-                    Status::NotFound,
-                )
-            })?;
-            check_compatible(&qualified, &schema, &existing)?;
-        }
-        IngestMode::CreateAppend => {
-            if let Some(existing) = existing {
-                check_compatible(&qualified, &schema, &existing)?;
-            } else {
-                create_table(state, &qualified, &schema, temporary)?;
-            }
-        }
-    }
-
-    let rows = batch.num_rows();
-    if rows == 0 {
-        return Ok(0);
-    }
-
-    let insert_sql = insert_sql(&qualified, &schema)?;
-    let size = batch_size.max(1);
-    let conn = state.lock()?;
-    let mut offset = 0;
-    while offset < rows {
-        let len = size.min(rows - offset);
-        let chunk = batch.slice(offset, len);
-        conn.execute_batch(&insert_sql, BindParameters::Arrow(chunk))
-            .map_err(from_oracle)?;
-        offset += len;
-    }
-    state.commit_if_autocommit(&conn)?;
-    Ok(rows.min(i64::MAX as usize) as i64)
+/// Parameters of one ingest call.
+pub(crate) struct IngestRequest<'a> {
+    pub(crate) mode: IngestMode,
+    pub(crate) target_table: &'a str,
+    pub(crate) target_schema: Option<&'a str>,
+    pub(crate) temporary: bool,
+    /// Rows per `execute_batch` round trip.
+    pub(crate) chunk_rows: usize,
 }
 
-fn qualified_name(schema: Option<&str>, table: &str) -> Result<String> {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TableKind {
+    Permanent,
+    /// `GLOBAL TEMPORARY ... ON COMMIT PRESERVE ROWS`: rows are private to
+    /// the session and survive commits; the definition is permanent.
+    GlobalTemporary,
+    /// `PRIVATE TEMPORARY ... ON COMMIT PRESERVE DEFINITION` (18c+): table
+    /// and rows are private to the session and dropped when it ends.
+    PrivateTemporary,
+}
+
+/// A table name as Oracle stores it, plus its quoted SQL form.
+#[derive(Clone, Debug)]
+struct TableName {
+    schema: Option<String>,
+    table: String,
+}
+
+impl TableName {
+    fn sql(&self) -> String {
+        match &self.schema {
+            Some(schema) => format!("{}.{}", quote(schema), quote(&self.table)),
+            None => quote(&self.table),
+        }
+    }
+}
+
+/// Quotes an identifier already normalised by [`normalize_identifier`].
+fn quote(name: &str) -> String {
+    format!("\"{name}\"")
+}
+
+use crate::metadata::normalize_identifier;
+
+fn resolve_name(schema: Option<&str>, table: &str) -> Result<TableName> {
     let (schema, table) = match (schema, table.rsplit_once('.')) {
         (Some(schema), _) => (Some(schema), table),
         (None, Some((schema, table))) => (Some(schema), table),
         (None, None) => (None, table),
     };
-    let table = quote_identifier(table, "table name")?;
-    match schema {
-        Some(schema) => Ok(format!(
-            "{}.{}",
-            quote_identifier(schema, "schema name")?,
-            table
-        )),
-        None => Ok(table),
-    }
+    Ok(TableName {
+        schema: schema
+            .map(|s| normalize_identifier(s, "schema name"))
+            .transpose()?,
+        table: normalize_identifier(table, "table name")?,
+    })
 }
 
-fn quote_identifier(value: &str, what: &str) -> Result<String> {
-    if value.trim().is_empty() {
-        return Err(error(
-            format!("{what} must not be empty"),
-            Status::InvalidArguments,
-        ));
-    }
-    // Rejects embedded double quotes, which is the only way to break out of a
-    // quoted identifier. Normalize to uppercase to match Oracle's default
-    // unquoted identifier behavior.
-    oracledb::enquote_name(value, true).map_err(from_oracle)
-}
-
-fn create_table(
-    state: &ConnState,
-    qualified: &str,
-    schema: &Schema,
-    temporary: bool,
-) -> Result<()> {
-    let mut seen = HashSet::new();
-    let mut columns = Vec::with_capacity(schema.fields().len());
+/// Checks that `oracledb` can bind every column, before any DDL runs.
+fn validate_bindable(schema: &Schema) -> Result<()> {
+    use DataType::*;
     for field in schema.fields() {
-        let name = quote_identifier(field.name(), "column name")?;
-        if !seen.insert(name.clone()) {
+        let ok = matches!(
+            field.data_type(),
+            Null | Boolean
+                | Int8
+                | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float16
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Date32
+                | Date64
+                | Timestamp(_, _)
+                | Utf8
+                | LargeUtf8
+                | Utf8View
+                | Binary
+                | LargeBinary
+                | BinaryView
+                | FixedSizeBinary(_)
+        );
+        if !ok {
+            let hint = match field.data_type() {
+                Decimal256(_, _) => "cast it to Decimal128 (Oracle NUMBER holds at most 38 digits)",
+                Dictionary(_, _) => "cast it to its value type",
+                _ => "cast it to a supported type",
+            };
             return Err(error(
-                format!("duplicate column name {name} in ingest schema"),
-                Status::InvalidArguments,
+                format!(
+                    "cannot ingest column {:?} of Arrow type {:?}; {hint}",
+                    field.name(),
+                    field.data_type()
+                ),
+                Status::NotImplemented,
             ));
         }
-        let ty = ddl_type(field.data_type())?;
-        let nullability = if field.is_nullable() { "" } else { " NOT NULL" };
-        columns.push(format!("{name} {ty}{nullability}"));
+        if let Decimal128(precision, _) = field.data_type() {
+            if *precision > 38 {
+                return Err(error(
+                    format!(
+                        "column {:?} has precision {precision}; Oracle NUMBER holds at most 38 digits",
+                        field.name()
+                    ),
+                    Status::InvalidArguments,
+                ));
+            }
+        }
     }
-    if columns.is_empty() {
+    if schema.fields().is_empty() {
         return Err(error(
             "cannot ingest a batch with no columns",
             Status::InvalidArguments,
         ));
     }
-    let temporary = if temporary { "GLOBAL TEMPORARY " } else { "" };
-    let ddl = format!(
-        "CREATE {temporary}TABLE {qualified} ({})",
-        columns.join(", ")
-    );
-    state.lock()?.execute(&ddl, &[]).map_err(from_oracle)?;
     Ok(())
 }
 
-fn drop_table(state: &ConnState, qualified: &str) -> Result<()> {
-    let ddl = format!("DROP TABLE {qualified} PURGE");
-    match state.lock()?.execute(&ddl, &[]) {
-        Ok(_) => Ok(()),
-        // ORA-00942: table or view does not exist
-        Err(err) if err.to_string().contains("ORA-00942") => Ok(()),
-        Err(err) => Err(from_oracle(err)),
-    }
-}
-
-fn insert_sql(qualified: &str, schema: &Schema) -> Result<String> {
-    let mut columns = Vec::with_capacity(schema.fields().len());
-    let mut binds = Vec::with_capacity(schema.fields().len());
-    for (i, field) in schema.fields().iter().enumerate() {
-        columns.push(quote_identifier(field.name(), "column name")?);
-        binds.push(format!(":{}", i + 1));
-    }
-    Ok(format!(
-        "INSERT INTO {qualified} ({}) VALUES ({})",
-        columns.join(", "),
-        binds.join(", ")
-    ))
-}
-
-fn check_compatible(qualified: &str, incoming: &Schema, existing: &Schema) -> Result<()> {
-    let mut mismatch = None;
-    if incoming.fields().len() != existing.fields().len() {
-        mismatch = Some(format!(
-            "incoming batch has {} columns but {qualified} has {}",
-            incoming.fields().len(),
-            existing.fields().len()
-        ));
-    } else {
-        for (i, (a, b)) in incoming
-            .fields()
-            .iter()
-            .zip(existing.fields().iter())
-            .enumerate()
-        {
-            if !a.name().eq_ignore_ascii_case(b.name()) {
-                mismatch = Some(format!(
-                    "column {i} is named {:?} in the batch but {:?} in {qualified}",
-                    a.name(),
-                    b.name()
-                ));
-                break;
-            }
-            if !types_compatible(a.data_type(), b.data_type()) {
-                mismatch = Some(format!(
-                    "column {:?} has type {:?} in the batch but {:?} in {qualified}; \
-                     cast the Arrow column to a matching type",
-                    a.name(),
-                    a.data_type(),
-                    b.data_type()
-                ));
-                break;
-            }
-        }
-    }
-    match mismatch {
-        Some(message) => Err(error(message, Status::AlreadyExists)),
-        None => Ok(()),
-    }
-}
-
-fn types_compatible(incoming: &DataType, existing: &DataType) -> bool {
+fn ddl_type(data_type: &DataType, native_boolean: bool) -> String {
     use DataType::*;
-    if incoming == existing {
-        return true;
-    }
-    match (incoming, existing) {
-        (Null, _) | (_, Null) => true,
-        (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Boolean, other) => {
-            is_numeric(other)
-        }
-        (Decimal128(_, _) | Decimal256(_, _), other) => is_numeric(other),
-        (other, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64) => {
-            is_numeric(other)
-        }
-        (Utf8 | LargeUtf8 | Utf8View | Dictionary(_, _), Utf8 | LargeUtf8 | Utf8View) => true,
-        (Dictionary(_, value), other) => types_compatible(value, other),
-        (Binary | LargeBinary | FixedSizeBinary(_), Binary | LargeBinary | FixedSizeBinary(_)) => {
-            true
-        }
-        (Date32 | Date64 | Timestamp(_, _), Timestamp(_, _)) => true,
-        (Timestamp(_, _), Date32 | Date64) => true,
-        _ => false,
-    }
-}
-
-fn is_numeric(data_type: &DataType) -> bool {
-    use DataType::*;
-    matches!(
-        data_type,
-        Int8 | Int16
-            | Int32
-            | Int64
-            | UInt8
-            | UInt16
-            | UInt32
-            | UInt64
-            | Float16
-            | Float32
-            | Float64
-            | Decimal128(_, _)
-            | Decimal256(_, _)
-            | Boolean
-    )
-}
-
-fn ddl_type(data_type: &DataType) -> Result<String> {
-    use DataType::*;
-    let ty = match data_type {
-        Int8 => "NUMBER(3,0)".to_string(),
-        Int16 => "NUMBER(5,0)".to_string(),
-        Int32 => "NUMBER(10,0)".to_string(),
-        Int64 => "NUMBER(19,0)".to_string(),
-        UInt8 => "NUMBER(3,0)".to_string(),
-        UInt16 => "NUMBER(5,0)".to_string(),
-        UInt32 => "NUMBER(10,0)".to_string(),
-        UInt64 => "NUMBER(20,0)".to_string(),
-        Float32 => "BINARY_FLOAT".to_string(),
-        Float64 => "BINARY_DOUBLE".to_string(),
-        Decimal128(precision, scale) | Decimal256(precision, scale) => {
-            format!("NUMBER({precision},{scale})")
-        }
-        Utf8 | Utf8View => "VARCHAR2(4000)".to_string(),
-        LargeUtf8 => "CLOB".to_string(),
-        Binary => "RAW(2000)".to_string(),
-        LargeBinary => "BLOB".to_string(),
-        FixedSizeBinary(size) => {
-            if *size == 0 || *size > 2000 {
-                return Err(error(
-                    format!("FixedSizeBinary({size}) cannot be stored in Oracle RAW(2000)"),
-                    Status::NotImplemented,
-                ));
-            }
-            format!("RAW({size})")
-        }
-        Date32 | Date64 => "DATE".to_string(),
+    match data_type {
+        Int8 | UInt8 => "NUMBER(3)".into(),
+        Int16 | UInt16 => "NUMBER(5)".into(),
+        Int32 | UInt32 => "NUMBER(10)".into(),
+        Int64 => "NUMBER(19)".into(),
+        UInt64 => "NUMBER(20)".into(),
+        Float16 | Float32 => "BINARY_FLOAT".into(),
+        Float64 => "BINARY_DOUBLE".into(),
+        Decimal128(precision, scale) => format!("NUMBER({precision},{scale})"),
+        Utf8 | Utf8View => "VARCHAR2(4000)".into(),
+        LargeUtf8 => "CLOB".into(),
+        Binary | BinaryView => "RAW(2000)".into(),
+        FixedSizeBinary(size) if (1..=2000).contains(size) => format!("RAW({size})"),
+        FixedSizeBinary(_) | LargeBinary => "BLOB".into(),
+        Date32 | Date64 => "DATE".into(),
         Timestamp(unit, tz) => {
             let precision = match unit {
                 TimeUnit::Second => 0,
@@ -311,20 +190,462 @@ fn ddl_type(data_type: &DataType) -> Result<String> {
                 TimeUnit::Microsecond => 6,
                 TimeUnit::Nanosecond => 9,
             };
-            if tz.is_some() {
-                format!("TIMESTAMP({precision}) WITH TIME ZONE")
-            } else {
-                format!("TIMESTAMP({precision})")
+            match tz {
+                Some(_) => format!("TIMESTAMP({precision}) WITH TIME ZONE"),
+                None => format!("TIMESTAMP({precision})"),
             }
         }
-        Boolean => "NUMBER(1,0)".to_string(),
-        Null => "VARCHAR2(1)".to_string(),
-        other => {
+        Boolean if native_boolean => "BOOLEAN".into(),
+        Boolean => "NUMBER(1)".into(),
+        // Only Null remains after validate_bindable.
+        _ => "VARCHAR2(1)".into(),
+    }
+}
+
+fn column_names(schema: &Schema) -> Result<Vec<String>> {
+    let mut seen = HashMap::new();
+    let mut names = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let name = normalize_identifier(field.name(), "column name")?;
+        if let Some(previous) = seen.insert(name.clone(), field.name().clone()) {
             return Err(error(
-                format!("Orkidea cannot ingest Arrow type {other:?}"),
-                Status::NotImplemented,
+                format!(
+                    "columns {previous:?} and {:?} both map to Oracle column {name:?}",
+                    field.name()
+                ),
+                Status::InvalidArguments,
             ));
         }
+        names.push(name);
+    }
+    Ok(names)
+}
+
+fn create_table(
+    conn: &Connection,
+    name: &TableName,
+    kind: TableKind,
+    schema: &Schema,
+    columns: &[String],
+    native_boolean: bool,
+) -> Result<()> {
+    let definitions: Vec<String> = schema
+        .fields()
+        .iter()
+        .zip(columns)
+        .map(|(field, column)| {
+            // Private temporary tables do not support constraints.
+            let nullability = if field.is_nullable() || kind == TableKind::PrivateTemporary {
+                ""
+            } else {
+                " NOT NULL"
+            };
+            format!(
+                "{} {}{nullability}",
+                quote(column),
+                ddl_type(field.data_type(), native_boolean)
+            )
+        })
+        .collect();
+    let body = definitions.join(", ");
+    let ddl = match kind {
+        TableKind::Permanent => format!("CREATE TABLE {} ({body})", name.sql()),
+        TableKind::GlobalTemporary => format!(
+            "CREATE GLOBAL TEMPORARY TABLE {} ({body}) ON COMMIT PRESERVE ROWS",
+            name.sql()
+        ),
+        TableKind::PrivateTemporary => format!(
+            "CREATE PRIVATE TEMPORARY TABLE {} ({body}) ON COMMIT PRESERVE DEFINITION",
+            name.sql()
+        ),
     };
-    Ok(ty)
+    conn.execute(&ddl, &[]).map_err(from_oracle)?;
+    Ok(())
+}
+
+/// Whether a dropped permanent table is kept in the recycle bin.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DropMode {
+    /// The user's table: recoverable with `FLASHBACK TABLE ... TO BEFORE DROP`.
+    Recoverable,
+    /// A table this ingest created and is cleaning up.
+    Purge,
+}
+
+/// Drops a table. A missing table is not an error.
+fn drop_table(conn: &Connection, name: &TableName, kind: TableKind, mode: DropMode) -> Result<()> {
+    if kind == TableKind::GlobalTemporary {
+        // A session cannot drop a global temporary table that holds its own
+        // rows (ORA-14452); truncating clears only this session's rows.
+        ignore_missing(conn.execute(&format!("TRUNCATE TABLE {}", name.sql()), &[]))?;
+    }
+    let purge = if kind == TableKind::Permanent && mode == DropMode::Purge {
+        " PURGE"
+    } else {
+        ""
+    };
+    ignore_missing(conn.execute(&format!("DROP TABLE {}{purge}", name.sql()), &[]))
+}
+
+fn ignore_missing<T>(result: std::result::Result<T, oracledb::Error>) -> Result<()> {
+    match result.map_err(from_oracle) {
+        Ok(_) => Ok(()),
+        Err(err) if err.vendor_code == ORA_TABLE_NOT_FOUND => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Describes an existing table, or `None` when it does not exist.
+fn existing_schema(state: &ConnState, name: &TableName) -> Result<Option<Schema>> {
+    match metadata::get_table_schema(state, None, name.schema.as_deref(), &name.table) {
+        Ok(schema) => Ok(Some(schema)),
+        Err(err) if err.status == Status::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+/// Arrow types that can be appended into a column the driver reads as
+/// `existing`.
+fn types_compatible(incoming: &DataType, existing: &DataType) -> bool {
+    use DataType::*;
+    let numeric = |t: &DataType| {
+        matches!(
+            t,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float16
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Decimal256(_, _)
+        )
+    };
+    let text = |t: &DataType| matches!(t, Utf8 | LargeUtf8 | Utf8View);
+    let binary = |t: &DataType| matches!(t, Binary | LargeBinary | BinaryView | FixedSizeBinary(_));
+    let datetime = |t: &DataType| matches!(t, Date32 | Date64 | Timestamp(_, _));
+    match (incoming, existing) {
+        (Null, _) => true,
+        (a, b) if numeric(a) => numeric(b) || *b == Boolean,
+        (Boolean, b) => *b == Boolean || numeric(b),
+        (a, b) if text(a) => text(b),
+        (a, b) if binary(a) => binary(b),
+        (a, b) if datetime(a) => datetime(b),
+        _ => false,
+    }
+}
+
+/// Checks an append against an existing table: every incoming column must
+/// exist (matched by Oracle name) with a compatible type. Columns the batch
+/// omits receive their defaults.
+fn check_compatible(
+    name: &TableName,
+    incoming: &Schema,
+    columns: &[String],
+    existing: &Schema,
+) -> Result<()> {
+    for (field, column) in incoming.fields().iter().zip(columns) {
+        let Ok(target) = existing.field_with_name(column) else {
+            return Err(error(
+                format!(
+                    "column {:?} (Oracle name {column:?}) does not exist in {}",
+                    field.name(),
+                    name.sql()
+                ),
+                Status::AlreadyExists,
+            ));
+        };
+        if !types_compatible(field.data_type(), target.data_type()) {
+            return Err(error(
+                format!(
+                    "column {:?} has Arrow type {:?}, which cannot be stored in {} column {column:?} ({})",
+                    field.name(),
+                    field.data_type(),
+                    name.sql(),
+                    target
+                        .metadata()
+                        .get(crate::types::ORACLE_TYPE_NAME_KEY)
+                        .map(String::as_str)
+                        .unwrap_or("unknown type")
+                ),
+                Status::AlreadyExists,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn insert_sql(name: &TableName, schema: &Schema, columns: &[String]) -> String {
+    let targets: Vec<String> = columns.iter().map(|c| quote(c)).collect();
+    let values: Vec<String> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, field)| match field.data_type() {
+            // oracledb binds Arrow timestamps as their UTC wall-clock time;
+            // FROM_TZ pins that to UTC so the stored instant is correct
+            // regardless of the session time zone.
+            DataType::Timestamp(_, Some(_)) => format!("FROM_TZ(:{}, 'UTC')", i + 1),
+            _ => format!(":{}", i + 1),
+        })
+        .collect();
+    format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        name.sql(),
+        targets.join(", "),
+        values.join(", ")
+    )
+}
+
+/// Inserts every batch, in chunks, under a savepoint. On failure all rows
+/// inserted by this call are rolled back.
+fn insert_all(
+    conn: &Connection,
+    sql: &str,
+    expected: &SchemaRef,
+    batches: &mut dyn Iterator<Item = Result<RecordBatch>>,
+    chunk_rows: usize,
+) -> Result<i64> {
+    conn.execute(&format!("SAVEPOINT {SAVEPOINT}"), &[])
+        .map_err(from_oracle)?;
+    let result = (|| {
+        let mut total: usize = 0;
+        for batch in batches {
+            let batch = batch?;
+            if batch.schema().fields() != expected.fields() {
+                return Err(error(
+                    "every batch in a bound stream must have the stream's schema",
+                    Status::InvalidArguments,
+                ));
+            }
+            let rows = batch.num_rows();
+            let mut offset = 0;
+            while offset < rows {
+                let len = chunk_rows.min(rows - offset);
+                conn.execute_batch(sql, BindParameters::Arrow(batch.slice(offset, len)))
+                    .map_err(|e| {
+                        let mut err = from_oracle(e);
+                        err.message = format!(
+                            "inserting rows {}..{} failed: {}",
+                            total + offset,
+                            total + offset + len,
+                            err.message
+                        );
+                        err
+                    })?;
+                offset += len;
+            }
+            total += rows;
+        }
+        Ok(total)
+    })();
+    match result {
+        Ok(total) => Ok(total.min(i64::MAX as usize) as i64),
+        Err(err) => {
+            // Best effort: the original error is the one worth reporting.
+            let _ = conn.execute(&format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}"), &[]);
+            Err(err)
+        }
+    }
+}
+
+fn staging_name(target: &TableName) -> TableName {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    TableName {
+        schema: target.schema.clone(),
+        table: format!("ORKIDEA$STAGE_{:X}_{:X}", std::process::id(), nanos),
+    }
+}
+
+/// Performs an ingest and returns the number of rows inserted.
+pub(crate) fn ingest(
+    state: &ConnState,
+    request: &IngestRequest<'_>,
+    schema: SchemaRef,
+    batches: &mut dyn Iterator<Item = Result<RecordBatch>>,
+) -> Result<i64> {
+    validate_bindable(&schema)?;
+    let name = resolve_name(request.target_schema, request.target_table)?;
+    let columns = column_names(&schema)?;
+    let kind = match (
+        request.temporary,
+        name.table
+            .to_ascii_uppercase()
+            .starts_with(PRIVATE_TEMP_PREFIX),
+    ) {
+        (false, _) => TableKind::Permanent,
+        (true, true) => TableKind::PrivateTemporary,
+        (true, false) => TableKind::GlobalTemporary,
+    };
+    if kind == TableKind::PrivateTemporary && name.schema.is_some() {
+        return Err(error(
+            "private temporary tables cannot be created in another schema",
+            Status::InvalidArguments,
+        ));
+    }
+    if kind == TableKind::PrivateTemporary {
+        if let Some(field) = schema
+            .fields()
+            .iter()
+            .find(|f| matches!(ddl_type(f.data_type(), true).as_str(), "CLOB" | "BLOB"))
+        {
+            return Err(error(
+                format!(
+                    "column {:?} would need a LOB column, which private temporary tables do \
+                     not support; use a name without the {PRIVATE_TEMP_PREFIX} prefix for a \
+                     global temporary table",
+                    field.name()
+                ),
+                Status::InvalidArguments,
+            ));
+        }
+    }
+    let chunk_rows = request.chunk_rows.max(1);
+    let existing = existing_schema(state, &name)?;
+    let conn = state.lock()?;
+    let native_boolean = conn.version().map_err(from_oracle)?.0 >= 23;
+    let insert = |target: &TableName, batches: &mut dyn Iterator<Item = Result<RecordBatch>>| {
+        insert_all(
+            &conn,
+            &insert_sql(target, &schema, &columns),
+            &schema,
+            batches,
+            chunk_rows,
+        )
+    };
+    // Creates `target`, loads it, and drops it again if loading fails.
+    let create_and_load =
+        |target: &TableName, batches: &mut dyn Iterator<Item = Result<RecordBatch>>| {
+            create_table(&conn, target, kind, &schema, &columns, native_boolean)?;
+            insert(target, batches).inspect_err(|_| {
+                let _ = drop_table(&conn, target, kind, DropMode::Purge);
+            })
+        };
+
+    let rows = match (request.mode, existing) {
+        (IngestMode::Create, Some(_)) => {
+            return Err(error(
+                format!("table {} already exists", name.sql()),
+                Status::AlreadyExists,
+            ))
+        }
+        (IngestMode::Append, None) => {
+            return Err(error(
+                format!("table {} does not exist", name.sql()),
+                Status::NotFound,
+            ))
+        }
+        (IngestMode::Append | IngestMode::CreateAppend, Some(existing)) => {
+            check_compatible(&name, &schema, &columns, &existing)?;
+            insert(&name, batches)?
+        }
+        (IngestMode::Create | IngestMode::CreateAppend | IngestMode::Replace, None) => {
+            create_and_load(&name, batches)?
+        }
+        (IngestMode::Replace, Some(_)) if kind != TableKind::Permanent => {
+            // Temporary data is session-scoped; nothing durable is at risk.
+            drop_table(&conn, &name, kind, DropMode::Purge)?;
+            create_and_load(&name, batches)?
+        }
+        (IngestMode::Replace, Some(_)) => {
+            let staging = staging_name(&name);
+            let rows = create_and_load(&staging, batches)?;
+            // The DROP commits the staged rows. Until then a failure leaves
+            // the original table untouched.
+            if let Err(err) = drop_table(&conn, &name, kind, DropMode::Recoverable) {
+                let _ = drop_table(&conn, &staging, kind, DropMode::Purge);
+                return Err(err);
+            }
+            let rename = format!(
+                "ALTER TABLE {} RENAME TO {}",
+                staging.sql(),
+                quote(&name.table)
+            );
+            conn.execute(&rename, &[]).map_err(|e| {
+                let mut err = from_oracle(e);
+                err.message = format!(
+                    "{}: the new data is in {} and the previous table is in the recycle bin",
+                    err.message,
+                    staging.sql()
+                );
+                err
+            })?;
+            rows
+        }
+    };
+    state.commit_if_autocommit(&conn)?;
+    Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_schema::Field;
+
+    #[test]
+    fn identifiers_follow_oracle_rules() {
+        assert_eq!(normalize_identifier("customers", "t").unwrap(), "CUSTOMERS");
+        assert_eq!(
+            normalize_identifier("Mixed Case", "t").unwrap(),
+            "Mixed Case"
+        );
+        assert!(normalize_identifier("bad\"name", "t").is_err());
+        assert!(normalize_identifier("  ", "t").is_err());
+        let name = resolve_name(None, "hr.emp").unwrap();
+        assert_eq!(name.sql(), "\"HR\".\"EMP\"");
+    }
+
+    #[test]
+    fn rejects_unbindable_types_before_ddl() {
+        let schema = Schema::new(vec![Field::new("d", DataType::Decimal256(50, 0), true)]);
+        let err = validate_bindable(&schema).unwrap_err();
+        assert!(err.message.contains("Decimal128"), "{}", err.message);
+        let schema = Schema::new(vec![Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        assert!(validate_bindable(&schema).is_err());
+    }
+
+    #[test]
+    fn duplicate_oracle_column_names_are_rejected() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("ID", DataType::Int32, true),
+        ]);
+        assert!(column_names(&schema).is_err());
+    }
+
+    #[test]
+    fn zone_aware_timestamps_are_pinned_to_utc() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("b", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        ]);
+        let columns = column_names(&schema).unwrap();
+        let name = resolve_name(None, "t").unwrap();
+        assert_eq!(
+            insert_sql(&name, &schema, &columns),
+            "INSERT INTO \"T\" (\"A\", \"B\") VALUES (FROM_TZ(:1, 'UTC'), :2)"
+        );
+    }
+
+    #[test]
+    fn boolean_ddl_depends_on_server_version() {
+        assert_eq!(ddl_type(&DataType::Boolean, true), "BOOLEAN");
+        assert_eq!(ddl_type(&DataType::Boolean, false), "NUMBER(1)");
+    }
 }

@@ -17,7 +17,7 @@ use adbc_core::error::{Result, Status};
 use adbc_core::options::{IngestMode, OptionStatement, OptionValue};
 use adbc_core::{Optionable, PartitionedResult, Statement};
 use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use oracledb::{BindParameters, Cursor, ToDbValue};
 
 use crate::config::{
@@ -64,6 +64,52 @@ pub(crate) fn open_cursor(
         .map_err(from_oracle)
 }
 
+/// Runs array DML for every bound batch, in chunks, under a savepoint so a
+/// failure leaves no partial effects. Returns the total rows affected.
+fn execute_batches(
+    conn: &oracledb::Connection,
+    sql: &str,
+    batches: BatchIter,
+    chunk_rows: usize,
+) -> Result<u64> {
+    const SAVEPOINT: &str = "ORKIDEA_DML";
+    let chunk_rows = chunk_rows.max(1);
+    conn.execute(&format!("SAVEPOINT {SAVEPOINT}"), &[])
+        .map_err(from_oracle)?;
+    let result = (|| {
+        let mut affected = 0u64;
+        let mut offset_total = 0usize;
+        for batch in batches {
+            let batch = batch?;
+            let rows = batch.num_rows();
+            let mut offset = 0;
+            while offset < rows {
+                let len = chunk_rows.min(rows - offset);
+                let result = conn
+                    .execute_batch(sql, BindParameters::Arrow(batch.slice(offset, len)))
+                    .map_err(|e| {
+                        let mut err = from_oracle(e);
+                        err.message = format!(
+                            "executing parameter rows {}..{} failed: {}",
+                            offset_total + offset,
+                            offset_total + offset + len,
+                            err.message
+                        );
+                        err
+                    })?;
+                affected += result.rows_affected();
+                offset += len;
+            }
+            offset_total += rows;
+        }
+        Ok(affected)
+    })();
+    if result.is_err() {
+        let _ = conn.execute(&format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}"), &[]);
+    }
+    result
+}
+
 /// Executes a query once per row of a bound parameter batch.
 struct ParamCursors {
     state: Arc<ConnState>,
@@ -84,11 +130,29 @@ impl CursorSource for ParamCursors {
     }
 }
 
+/// Data bound to a statement: one batch (reusable) or a stream (consumed by
+/// the next execution).
+pub(crate) enum Bound {
+    Batch(RecordBatch),
+    Stream(Box<dyn RecordBatchReader + Send>),
+}
+
+impl Bound {
+    fn schema(&self) -> SchemaRef {
+        match self {
+            Self::Batch(batch) => batch.schema(),
+            Self::Stream(reader) => reader.schema(),
+        }
+    }
+}
+
+type BatchIter = Box<dyn Iterator<Item = Result<RecordBatch>> + Send>;
+
 /// An ADBC statement bound to one Oracle session.
 pub struct OracleStatement {
     pub(crate) state: Arc<ConnState>,
     pub(crate) sql: Option<String>,
-    pub(crate) batch: Option<RecordBatch>,
+    pub(crate) bound: Option<Bound>,
     pub(crate) prepared: bool,
     pub(crate) bind_names: Vec<String>,
     pub(crate) ingest_mode: Option<IngestMode>,
@@ -126,7 +190,7 @@ impl OracleStatement {
         Ok(Self {
             state,
             sql: None,
-            batch: None,
+            bound: None,
             prepared: false,
             bind_names: Vec::new(),
             ingest_mode: None,
@@ -138,6 +202,14 @@ impl OracleStatement {
             tuning,
             type_options,
         })
+    }
+
+    fn clear_ingest(&mut self) {
+        self.ingest_mode = None;
+        self.target_table = None;
+        self.target_catalog = None;
+        self.target_schema = None;
+        self.temporary = false;
     }
 
     fn sql(&self) -> Result<String> {
@@ -157,6 +229,48 @@ impl OracleStatement {
             ));
         }
         Ok(())
+    }
+
+    /// The bound data as a sequence of batches. A bound batch stays bound
+    /// for the next execution; a bound stream is consumed.
+    fn bound_batches(&mut self) -> Option<(SchemaRef, BatchIter)> {
+        match self.bound.take()? {
+            Bound::Batch(batch) => {
+                self.bound = Some(Bound::Batch(batch.clone()));
+                Some((batch.schema(), Box::new(std::iter::once(Ok(batch)))))
+            }
+            Bound::Stream(reader) => {
+                let schema = reader.schema();
+                let iter = reader
+                    .map(|b| b.map_err(|e| error(format!("bound stream failed: {e}"), Status::IO)));
+                Some((schema, Box::new(iter)))
+            }
+        }
+    }
+
+    /// The bound parameters as a single batch, for queries (which run once
+    /// per parameter row). A bound stream is collected and kept.
+    fn bound_params(&mut self) -> Result<Option<RecordBatch>> {
+        match self.bound.take() {
+            None => Ok(None),
+            Some(Bound::Batch(batch)) => {
+                self.bound = Some(Bound::Batch(batch.clone()));
+                Ok(Some(batch))
+            }
+            Some(Bound::Stream(reader)) => {
+                let schema = reader.schema();
+                let batches = reader.collect::<std::result::Result<Vec<_>, _>>()?;
+                let batch =
+                    arrow_select::concat::concat_batches(&schema, &batches).map_err(|e| {
+                        error(
+                            format!("failed to concatenate bound parameters: {e}"),
+                            Status::InvalidData,
+                        )
+                    })?;
+                self.bound = Some(Bound::Batch(batch.clone()));
+                Ok(Some(batch))
+            }
+        }
     }
 
     /// Classifies the statement (query, DML, ...) with oracledb's client-side
@@ -201,7 +315,8 @@ impl OracleStatement {
             )?));
         }
 
-        let (first, source): (Option<Cursor>, Box<dyn CursorSource>) = match &self.batch {
+        let params = self.bound_params()?;
+        let (first, source): (Option<Cursor>, Box<dyn CursorSource>) = match params {
             None => (
                 Some(open_cursor(&self.state, &sql, &[], self.tuning)?),
                 Box::new(NoMoreCursors),
@@ -210,7 +325,7 @@ impl OracleStatement {
                 let mut source = ParamCursors {
                     state: self.state.clone(),
                     sql: sql.clone(),
-                    params: params.clone(),
+                    params,
                     next_row: 0,
                     tuning: self.tuning,
                 };
@@ -234,16 +349,14 @@ impl OracleStatement {
 
     fn execute_non_query(&mut self, sql: &str) -> Result<i64> {
         self.ensure_writable()?;
+        let bound = self.bound_batches();
         let conn = self.state.lock()?;
-        let affected = match &self.batch {
-            Some(batch) => conn
-                .execute_batch(sql, BindParameters::Arrow(batch.clone()))
-                .map_err(from_oracle)?
-                .rows_affected(),
+        let affected = match bound {
             None => conn
                 .execute(sql, &[] as &[&dyn ToDbValue])
                 .map_err(from_oracle)?
                 .rows_affected(),
+            Some((_, batches)) => execute_batches(&conn, sql, batches, self.batch_size)?,
         };
         self.state.commit_if_autocommit(&conn)?;
         Ok(affected.min(i64::MAX as u64) as i64)
@@ -266,21 +379,20 @@ impl OracleStatement {
                 Status::NotImplemented,
             ));
         }
-        let batch = self.batch.clone().ok_or_else(|| {
+        let (schema, mut batches) = self.bound_batches().ok_or_else(|| {
             error(
-                "ingest requires a bound Arrow RecordBatch (bind before execute_update)",
+                "ingest requires bound data (bind or bind_stream before execute_update)",
                 Status::InvalidState,
             )
         })?;
-        ingest::ingest(
-            &self.state,
+        let request = ingest::IngestRequest {
             mode,
-            &target,
-            self.target_schema.as_deref(),
-            self.temporary,
-            &batch,
-            self.batch_size,
-        )
+            target_table: &target,
+            target_schema: self.target_schema.as_deref(),
+            temporary: self.temporary,
+            chunk_rows: self.batch_size,
+        };
+        ingest::ingest(&self.state, &request, schema, &mut batches)
     }
 }
 
@@ -296,7 +408,11 @@ impl Optionable for OracleStatement {
                 Ok(())
             }
             adbc_core::constants::ADBC_INGEST_OPTION_TARGET_TABLE => {
+                // Choosing an ingest target replaces any SQL query.
                 self.target_table = Some(expect_string(&value, key)?);
+                self.sql = None;
+                self.prepared = false;
+                self.bind_names.clear();
                 Ok(())
             }
             adbc_core::constants::ADBC_INGEST_OPTION_TARGET_CATALOG => {
@@ -420,23 +536,14 @@ impl Optionable for OracleStatement {
 
 impl Statement for OracleStatement {
     fn bind(&mut self, batch: RecordBatch) -> Result<()> {
-        self.batch = Some(batch);
+        self.bound = Some(Bound::Batch(batch));
         Ok(())
     }
 
-    fn bind_stream(&mut self, mut reader: Box<dyn RecordBatchReader + Send>) -> Result<()> {
-        let schema = reader.schema();
-        let mut batches = Vec::new();
-        for batch in &mut reader {
-            batches.push(batch?);
-        }
-        let batch = arrow_select::concat::concat_batches(&schema, &batches).map_err(|e| {
-            error(
-                format!("failed to concatenate bound batches: {e}"),
-                Status::InvalidData,
-            )
-        })?;
-        self.batch = Some(batch);
+    /// Binds a stream without reading it; ingest and DML consume it batch
+    /// by batch at execution time.
+    fn bind_stream(&mut self, reader: Box<dyn RecordBatchReader + Send>) -> Result<()> {
+        self.bound = Some(Bound::Stream(reader));
         Ok(())
     }
 
@@ -482,11 +589,15 @@ impl Statement for OracleStatement {
     }
 
     fn get_parameter_schema(&self) -> Result<Schema> {
-        if let Some(batch) = &self.batch {
-            return Ok((*batch.schema()).clone());
-        }
+        // Oracle does not describe bind types, so prepared parameters are
+        // reported by name with type Null, as ADBC specifies for unknown
+        // types. Without a prepared statement, the bound data's schema is
+        // the best available answer.
         if self.bind_names.is_empty() {
-            return Ok(Schema::empty());
+            return Ok(match &self.bound {
+                Some(bound) => (*bound.schema()).clone(),
+                None => Schema::empty(),
+            });
         }
         let fields: Vec<Field> = self
             .bind_names
@@ -504,14 +615,26 @@ impl Statement for OracleStatement {
             .map_err(from_oracle)?
             .build()
             .map_err(from_oracle)?;
-        stmt.ensure_fully_parsed().map_err(from_oracle)?;
+        // Oracle executes DDL when it is parsed, so only queries and DML are
+        // parsed on the server here (catching SQL errors early). Bind names
+        // come from oracledb's client-side parser and need no round trip.
+        if stmt.is_query() || stmt.is_dml() {
+            stmt.ensure_fully_parsed().map_err(from_oracle)?;
+        }
         self.bind_names = stmt.bind_names().to_vec();
         drop(conn);
         self.prepared = true;
         Ok(())
     }
 
+    /// Setting a query switches the statement out of ingest mode. Data bound
+    /// for a previous ingest is dropped so it is not mistaken for query
+    /// parameters (DB-API cursors reuse one statement for both).
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> Result<()> {
+        if self.ingest_mode.take().is_some() || self.target_table.is_some() {
+            self.clear_ingest();
+            self.bound = None;
+        }
         self.sql = Some(query.as_ref().to_string());
         self.prepared = false;
         self.bind_names.clear();
