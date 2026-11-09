@@ -31,8 +31,12 @@ pushed (see [docs/release.md](docs/release.md)).
   type, or panic, and left the connection unusable. It happened after
   `prepare()` (which every DB-API `execute` calls), on a statement cache hit,
   and in about one table in four of a random sample. The cause was in
-  `oracledb`, which sized the row's bit vector from the wrong column count.
-  A seeded test of 30 random wide tables now runs in CI.
+  `oracledb`, which sized the row's bit vector from the wrong column count
+  ([oracle/rust-oracledb#80](https://github.com/oracle/rust-oracledb/issues/80)).
+  Until a release includes the fix, Orkidea builds with `oracledb`
+  26.0.0-beta.5 plus that one fix, from
+  [Tnsor-Labs/rust-oracledb](https://github.com/Tnsor-Labs/rust-oracledb),
+  pinned by commit. A seeded test of 30 random wide tables now runs in CI.
 
 ### Documentation
 

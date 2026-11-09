@@ -23,8 +23,10 @@ sponsored by, or endorsed by Oracle Corporation.
 - A Rust toolchain and a C++ toolchain for the optional DuckDB extension
 
 The driver is built on [`rust-oracledb`](https://github.com/oracle/rust-oracledb),
-currently pinned to the beta dependency `26.0.0-beta.5`. Review that dependency
-and its license terms before adopting Orkidea.
+currently pinned to the beta dependency `26.0.0-beta.5`, plus a fix for
+[oracle/rust-oracledb#80](https://github.com/oracle/rust-oracledb/issues/80)
+built from the commit pinned in `Cargo.toml` until a release includes it.
+Review that dependency and its license terms before adopting Orkidea.
 
 CI runs the Rust and Python test suites on Linux amd64 against Oracle
 Database Free 23ai, with the oldest and newest supported Python

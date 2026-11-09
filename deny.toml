@@ -40,3 +40,6 @@ allow = ["CDLA-Permissive-2.0"]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# oracledb with the fix for oracle/rust-oracledb#80, pinned by commit in
+# Cargo.toml. Remove with the [patch.crates-io] entry.
+allow-git = ["https://github.com/Tnsor-Labs/rust-oracledb"]

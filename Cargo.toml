@@ -33,3 +33,9 @@ strip = false
 [profile.dist]
 inherits = "release"
 debug = "line-tables-only"
+
+# oracledb 26.0.0-beta.5 with the fix for oracle/rust-oracledb#80 (wide rows
+# of already-parsed statements are misparsed). The fork's branch is that
+# release plus one commit. Remove once a release includes the fix.
+[patch.crates-io]
+oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "6bdb5c5e13ac734f1b1c8361b64f1f055cd2d393" }
