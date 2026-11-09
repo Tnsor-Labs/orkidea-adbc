@@ -34,9 +34,15 @@ pushed (see [docs/release.md](docs/release.md)).
   `oracledb`, which sized the row's bit vector from the wrong column count
   ([oracle/rust-oracledb#80](https://github.com/oracle/rust-oracledb/issues/80)).
   Until a release includes the fix, Orkidea builds with `oracledb`
-  26.0.0-beta.5 plus that one fix, from
+  26.0.0-beta.5 plus this fix (and the next), from
   [Tnsor-Labs/rust-oracledb](https://github.com/Tnsor-Labs/rust-oracledb),
   pinned by commit. A seeded test of 30 random wide tables now runs in CI.
+- **`tnsnames.ora` aliases after a comment are found** -- @hc12r. An alias
+  written on the line after a `#` comment, as in most `tnsnames.ora` files,
+  failed with "unable to find" the alias: `oracledb`'s parser dropped the
+  first character of the line after a comment. The fork that Orkidea builds
+  with now includes the fix, and a live test connects through an alias
+  written that way.
 
 ### Documentation
 
