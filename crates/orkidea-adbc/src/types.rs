@@ -79,7 +79,7 @@ impl UnconstrainedNumber {
 }
 
 /// Options that influence type planning.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TypeOptions {
     pub(crate) unconstrained_number: UnconstrainedNumber,
     pub(crate) unconstrained_number_scale: i8,

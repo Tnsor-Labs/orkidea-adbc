@@ -28,6 +28,13 @@ ORKIDEA_ADBC_URI='oracle://user:password@host:1521/service' \
 constraints, filters, optimizer statistics, and the catalog option. It
 creates and drops `ORKIDEA_C_*` objects and gathers statistics on them.
 
+`plsql_live` covers OUT binds, REF CURSOR results, DML RETURNING and vector
+parameters (needs `CREATE PROCEDURE`). `options_live` covers session and
+tracing options and secret handling. Its SYSDBA test runs only when
+`ORKIDEA_ADBC_ADMIN_URI` points at a SYS account. `partition_live` covers
+partitioned reads; its consistency test needs
+`GRANT EXECUTE ON DBMS_FLASHBACK`.
+
 `ingest_live` covers every ingest mode, rollback on failure, safe `replace`,
 global and private temporary tables, streaming `bind_stream`, time-zone
 handling, and Oracle name resolution. It creates and drops tables named

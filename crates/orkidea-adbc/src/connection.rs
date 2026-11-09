@@ -350,12 +350,20 @@ impl Connection for OracleConnection {
 
     fn read_partition(
         &self,
-        _partition: impl AsRef<[u8]>,
+        partition: impl AsRef<[u8]>,
     ) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
-        Err(error(
-            "Orkidea does not implement partitioned execution; use execute()",
-            Status::NotImplemented,
-        ))
+        use crate::reader::{cursor_rows, NoMoreRows, OracleBatchReader};
+        use crate::types::{plan_columns, schema_of};
+        let partition = crate::partition::Partition::decode(partition.as_ref())?;
+        let cursor = crate::partition::open(&self.state, &partition)?;
+        let plans = plan_columns(cursor.columns(), &partition.type_options)?;
+        Ok(Box::new(OracleBatchReader::new(
+            schema_of(&plans),
+            plans,
+            Some(cursor_rows(cursor)),
+            Box::new(NoMoreRows),
+            partition.batch_size as usize,
+        )?))
     }
 }
 

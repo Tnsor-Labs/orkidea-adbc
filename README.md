@@ -70,8 +70,13 @@ covered by CI or release validation.
   attributes, call and connect timeouts, and fetch tuning. Secret options are
   write-only. See [docs/options.md](docs/options.md)
 
-Partitioned execution, Substrait, statement cancellation, and proxy
-authentication are not implemented. Scheduler jobs and other
+- Partitioned reads: `execute_partitions` splits a query into hash
+  partitions that any connection can read in parallel. Optionally, every
+  partition reads one consistent snapshot through Flashback Query. See
+  [docs/partitions.md](docs/partitions.md)
+
+Substrait, statement cancellation, and proxy authentication are not
+implemented. Scheduler jobs and other
 server-management features are outside the model ADBC exposes.
 
 ## Build

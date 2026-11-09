@@ -66,6 +66,7 @@ jobs:
           GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE PROCEDURE,
                 CREATE MATERIALIZED VIEW, CREATE SEQUENCE TO orkidea_test;
           ALTER USER orkidea_test QUOTA UNLIMITED ON USERS;
+          GRANT EXECUTE ON DBMS_FLASHBACK TO orkidea_test;
           SQL
       - name: Run tests against Oracle
         run: cargo test --workspace --locked

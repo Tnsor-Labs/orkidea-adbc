@@ -76,11 +76,13 @@ the defaults for every statement. See [type-support.md](type-support.md).
 | `oracle.batch_size` | Rows per Arrow batch and per array-DML chunk (default 8192). |
 | `oracle.fetch_array_size`, `oracle.prefetch_rows` | Fetch round-trip tuning. |
 | `oracle.unconstrained_number`, `oracle.unconstrained_number_scale` | How `NUMBER` columns without a declared precision are read. |
+| `oracle.partition.count`, `oracle.partition.column`, `oracle.partition.consistent` | Partitioned reads; see [partitions.md](partitions.md). |
 
 ## Not supported
 
 Proxy authentication (`user[session_user]`) is not available: the underlying
 `oracledb` 26.0.0-beta.5 driver's logon is rejected by the server
-(ORA-01017), although the same credentials work with SQL*Plus. Token, IAM,
+(ORA-01017), although the same credentials work with SQL*Plus
+([oracle/rust-oracledb#56](https://github.com/oracle/rust-oracledb/issues/56)). Token, IAM,
 Kerberos and external authentication, `cwallet.sso` wallets, and Easy Connect
 `?key=value` parameters are not supported by `oracledb` yet.

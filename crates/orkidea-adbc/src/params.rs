@@ -154,7 +154,8 @@ const MAX_VECTOR_TEXT: usize = 4000;
 /// bind in the same statement (ORA-03120, ORA-24813, ORA-64219, or the
 /// session is terminated with ORA-03138). A native VECTOR bind is safe only
 /// when nothing but other VECTOR binds follow it, so earlier vectors are
-/// sent as text.
+/// sent as text. Remove once
+/// <https://github.com/oracle/rust-oracledb/issues/79> is fixed upstream.
 fn vector_as_text(vector: &Vector, position: usize) -> Result<Box<dyn ToDbValue>> {
     let mut text = String::new();
     crate::convert::write_vector(&mut text, vector);

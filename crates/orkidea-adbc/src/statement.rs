@@ -36,8 +36,12 @@ use crate::types::{plan_columns, schema_of, TypeOptions, UnconstrainedNumber};
 
 pub(crate) const DEFAULT_BATCH_SIZE: usize = 8192;
 
+pub(crate) const OPT_PARTITION_COUNT: &str = "oracle.partition.count";
+pub(crate) const OPT_PARTITION_COLUMN: &str = "oracle.partition.column";
+pub(crate) const OPT_PARTITION_CONSISTENT: &str = "oracle.partition.consistent";
+
 /// Round-trip tuning applied to each Oracle cursor.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FetchTuning {
     /// Rows fetched per round trip (`None`: oracledb default, 100).
     pub(crate) fetch_array_size: Option<u32>,
@@ -182,6 +186,9 @@ pub struct OracleStatement {
     pub(crate) batch_size: usize,
     pub(crate) tuning: FetchTuning,
     pub(crate) type_options: TypeOptions,
+    pub(crate) partition_count: u32,
+    pub(crate) partition_column: Option<String>,
+    pub(crate) partition_consistent: bool,
 }
 
 fn positive_u32(defaults: &crate::config::DbOptions, key: &str, allow_zero: bool) -> Option<u32> {
@@ -220,6 +227,9 @@ impl OracleStatement {
             batch_size,
             tuning,
             type_options,
+            partition_count: 1,
+            partition_column: None,
+            partition_consistent: false,
         })
     }
 
@@ -646,6 +656,33 @@ impl Optionable for OracleStatement {
                     validate_number_scale(expect_int(&value, key)?)?;
                 Ok(())
             }
+            OPT_PARTITION_COUNT => {
+                let v = expect_int(&value, key)?;
+                self.partition_count = u32::try_from(v)
+                    .ok()
+                    .filter(|v| (1..=crate::partition::MAX_PARTITIONS).contains(v))
+                    .ok_or_else(|| {
+                        error(
+                            format!(
+                                "{OPT_PARTITION_COUNT} must be between 1 and {}",
+                                crate::partition::MAX_PARTITIONS
+                            ),
+                            Status::InvalidArguments,
+                        )
+                    })?;
+                Ok(())
+            }
+            OPT_PARTITION_COLUMN => {
+                self.partition_column = Some(crate::metadata::normalize_identifier(
+                    &expect_string(&value, key)?,
+                    "partition column",
+                )?);
+                Ok(())
+            }
+            OPT_PARTITION_CONSISTENT => {
+                self.partition_consistent = expect_bool(&value, key)?;
+                Ok(())
+            }
             _ => Err(error(
                 format!("unknown Orkidea statement option {key:?}"),
                 Status::InvalidArguments,
@@ -665,6 +702,11 @@ impl Optionable for OracleStatement {
                 .clone()
                 .ok_or_else(|| error("target table was not set", Status::NotFound)),
             OPT_UNCONSTRAINED_NUMBER => Ok(self.type_options.unconstrained_number.as_str().into()),
+            OPT_PARTITION_COLUMN => self
+                .partition_column
+                .clone()
+                .ok_or_else(|| error("partition column was not set", Status::NotFound)),
+            OPT_PARTITION_CONSISTENT => Ok(self.partition_consistent.to_string()),
             _ => Err(error(
                 format!("unknown Orkidea string option {key:?}"),
                 Status::NotFound,
@@ -696,6 +738,7 @@ impl Optionable for OracleStatement {
             OPT_UNCONSTRAINED_NUMBER_SCALE => {
                 Ok(i64::from(self.type_options.unconstrained_number_scale))
             }
+            OPT_PARTITION_COUNT => Ok(i64::from(self.partition_count)),
             _ => Err(error(
                 format!("unknown Orkidea integer option {key:?}"),
                 Status::NotFound,
@@ -758,11 +801,88 @@ impl Statement for OracleStatement {
         Ok((*schema_of(&plans)).clone())
     }
 
+    /// Splits a query into `oracle.partition.count` hash partitions on
+    /// `oracle.partition.column` (see [`crate::partition`]). Nothing is
+    /// fetched: each descriptor is read with `read_partition`, on this or any
+    /// other connection to the same database.
     fn execute_partitions(&mut self) -> Result<PartitionedResult> {
-        Err(error(
-            "Orkidea does not support partitioned execution",
-            Status::NotImplemented,
-        ))
+        if self.ingest_mode.is_some() {
+            return Err(error(
+                "ingest statements cannot be partitioned",
+                Status::InvalidState,
+            ));
+        }
+        if self.bound.is_some() {
+            return Err(error(
+                "partitioned execution does not support bound parameters",
+                Status::NotImplemented,
+            ));
+        }
+        let sql = self.sql()?;
+        if self.classify(&sql)? != Kind::Query {
+            return Err(error(
+                "only queries can be executed as partitions",
+                Status::InvalidArguments,
+            ));
+        }
+        let described = self.describe(&sql)?;
+        let plans = plan_columns(described.out_metadata(), &self.type_options)?;
+        let schema = (*schema_of(&plans)).clone();
+        drop(described);
+
+        let count = self.partition_count;
+        let column = match (count, &self.partition_column) {
+            (1, _) => None,
+            (_, None) => {
+                return Err(error(
+                    format!("{OPT_PARTITION_COUNT} > 1 needs {OPT_PARTITION_COLUMN}"),
+                    Status::InvalidArguments,
+                ))
+            }
+            (_, Some(column)) => {
+                if schema.field_with_name(column).is_err() {
+                    return Err(error(
+                        format!(
+                            "partition column {column:?} is not a column of the query result \
+                             (columns: {})",
+                            schema
+                                .fields()
+                                .iter()
+                                .map(|f| f.name().as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        Status::InvalidArguments,
+                    ));
+                }
+                Some(column.clone())
+            }
+        };
+        let scn = if self.partition_consistent {
+            Some(crate::partition::current_scn(&*self.state.lock()?)?)
+        } else {
+            None
+        };
+        let partitions = (0..count)
+            .map(|index| {
+                crate::partition::Partition {
+                    sql: sql.clone(),
+                    column: column.clone(),
+                    count,
+                    index,
+                    scn,
+                    type_options: self.type_options,
+                    batch_size: u32::try_from(self.batch_size).unwrap_or(u32::MAX),
+                    tuning: self.tuning,
+                }
+                .encode()
+            })
+            .collect();
+        Ok(PartitionedResult {
+            partitions,
+            schema,
+            rows_affected: -1,
+        })
     }
 
     fn get_parameter_schema(&self) -> Result<Schema> {

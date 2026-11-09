@@ -32,6 +32,7 @@ mod error;
 mod ingest;
 mod metadata;
 mod params;
+mod partition;
 mod reader;
 mod statement;
 mod types;

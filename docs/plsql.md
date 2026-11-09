@@ -84,7 +84,8 @@ SELECT id FROM docs ORDER BY VECTOR_DISTANCE(embedding, :query) FETCH FIRST 10 R
 ```
 
 oracledb 26.0.0-beta.5 corrupts any bind that follows a native `VECTOR` bind
-in the same statement. The driver works around it:
+in the same statement
+([oracle/rust-oracledb#79](https://github.com/oracle/rust-oracledb/issues/79)). The driver works around it:
 
 - Ingest lists vector columns last in its INSERT.
 - In your own SQL, a vector parameter followed only by other vector
