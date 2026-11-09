@@ -239,3 +239,84 @@ fn read_only_connections_refuse_plsql() {
     conn.set_option(OptionConnection::ReadOnly, "false".into())
         .unwrap();
 }
+
+fn minus_params() -> RecordBatch {
+    // Fields in the opposite order of the placeholders.
+    RecordBatch::try_from_iter([
+        ("b", Arc::new(Int64Array::from(vec![2])) as ArrayRef),
+        ("a", Arc::new(Int64Array::from(vec![10])) as ArrayRef),
+    ])
+    .unwrap()
+}
+
+fn minus(
+    conn: &mut OracleConnection,
+    bind_by_name: Option<&str>,
+    params: RecordBatch,
+) -> adbc_core::error::Result<f64> {
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT :a - :b AS d FROM dual").unwrap();
+    if let Some(value) = bind_by_name {
+        stmt.set_option(
+            statement_option("adbc.statement.bind_by_name"),
+            value.into(),
+        )
+        .unwrap();
+    }
+    stmt.bind(params).unwrap();
+    let batches = stmt.execute()?.collect::<Result<Vec<_>, _>>().unwrap();
+    Ok(batches[0].column(0).as_primitive::<Float64Type>().value(0))
+}
+
+/// `adbc.statement.bind_by_name`, which the Python DB-API sets for dict
+/// parameters, makes the matching explicit.
+#[test]
+fn bind_by_name_option_controls_matching() {
+    let Some(mut conn) = connect() else { return };
+    assert_eq!(minus(&mut conn, None, minus_params()).unwrap(), 8.0);
+    assert_eq!(minus(&mut conn, Some("true"), minus_params()).unwrap(), 8.0);
+    assert_eq!(
+        minus(&mut conn, Some("false"), minus_params()).unwrap(),
+        -8.0
+    );
+
+    let unmatched = RecordBatch::try_from_iter([
+        ("a", Arc::new(Int64Array::from(vec![10])) as ArrayRef),
+        ("c", Arc::new(Int64Array::from(vec![2])) as ArrayRef),
+    ])
+    .unwrap();
+    let err = minus(&mut conn, Some("true"), unmatched).unwrap_err();
+    assert_eq!(err.status, adbc_core::error::Status::InvalidArguments);
+    assert!(
+        err.message.contains("no bound parameter is named \"B\""),
+        "{}",
+        err.message
+    );
+}
+
+/// Parameters bound for one query are not sent with the next one.
+#[test]
+fn a_new_query_drops_parameters_bound_for_the_previous_one() {
+    let Some(mut conn) = connect() else { return };
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT :a AS v FROM dual").unwrap();
+    stmt.bind(
+        RecordBatch::try_from_iter([("a", Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef)])
+            .unwrap(),
+    )
+    .unwrap();
+    let batches = stmt
+        .execute()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(total_rows(&batches), 2);
+
+    stmt.set_sql_query("SELECT 1 AS v FROM dual").unwrap();
+    let batches = stmt
+        .execute()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(total_rows(&batches), 1);
+}

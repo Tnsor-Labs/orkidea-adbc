@@ -16,6 +16,13 @@ BEGIN :doubled := :n * 2; END;   -- fields "n" and "doubled", in any order
 Otherwise parameters bind **by position**, in order of each placeholder's
 first appearance (`:1`, `:2`, ...).
 
+The statement option `adbc.statement.bind_by_name` makes the choice explicit.
+With `true`, every placeholder must match exactly one field name, and every
+field must match a placeholder. Anything else fails with `INVALID_ARGUMENT`.
+With `false`, fields bind in order whatever their names. The ADBC Python DB-API
+sets this option itself: a `dict` of parameters binds by name, a sequence by
+position.
+
 OUT parameters are bound like any other parameter, as NULL values. Give the
 NULL a type, either through the Arrow type (a null `Int64` column binds as
 `NUMBER`) or with field metadata `oracle.bind_type`. The metadata works on an

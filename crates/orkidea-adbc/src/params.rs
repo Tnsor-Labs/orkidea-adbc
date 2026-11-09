@@ -31,7 +31,7 @@ use arrow_array::types::{
     UInt64Type, UInt8Type,
 };
 use arrow_array::{Array, ArrayRef, RecordBatch};
-use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use oracledb::{
     DbType, OracleIntervalDS, OracleIntervalYM, OracleNumber, ToDbValue, Vector, VectorData,
 };
@@ -419,6 +419,20 @@ pub(crate) fn execute_chunk(
         .map_err(from_oracle)
 }
 
+/// How bound parameter columns are matched to a statement's placeholders
+/// (`adbc.statement.bind_by_name`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BindMode {
+    /// By name when every placeholder matches a field name, otherwise by
+    /// position.
+    #[default]
+    Auto,
+    /// Every placeholder must match exactly one field name.
+    ByName,
+    /// Fields bind in order, whatever their names.
+    ByPosition,
+}
+
 /// Orders parameter columns for a statement's bind placeholders.
 ///
 /// When every placeholder name matches a parameter field name
@@ -426,8 +440,7 @@ pub(crate) fn execute_chunk(
 /// bind by name: `:doubled := :n * 2` takes `n` and `doubled` from the
 /// fields of those names, whatever their order. Otherwise they bind by
 /// position, in order of first appearance, as ADBC specifies.
-pub(crate) fn bind_order(bind_names: &[String], batch: &RecordBatch) -> Option<Vec<usize>> {
-    let schema = batch.schema();
+fn auto_order(bind_names: &[String], schema: &Schema) -> Option<Vec<usize>> {
     if bind_names.is_empty() || bind_names.len() != schema.fields().len() {
         return None;
     }
@@ -442,9 +455,56 @@ pub(crate) fn bind_order(bind_names: &[String], batch: &RecordBatch) -> Option<V
         .collect()
 }
 
-/// Reorders `batch` for binding (see [`bind_order`]).
-pub(crate) fn for_binds(bind_names: &[String], batch: RecordBatch) -> Result<RecordBatch> {
-    match bind_order(bind_names, &batch) {
+/// The field for each placeholder, requiring a one-to-one match by name.
+fn name_order(bind_names: &[String], schema: &Schema) -> Result<Vec<usize>> {
+    let mut used = vec![false; schema.fields().len()];
+    let mut order = Vec::with_capacity(bind_names.len());
+    for bind in bind_names {
+        let mut matches = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.name().eq_ignore_ascii_case(bind))
+            .map(|(i, _)| i);
+        let index = matches.next().ok_or_else(|| {
+            error(
+                format!("no bound parameter is named {bind:?}"),
+                Status::InvalidArguments,
+            )
+        })?;
+        if matches.next().is_some() {
+            return Err(error(
+                format!("several bound parameters match placeholder {bind:?}"),
+                Status::InvalidArguments,
+            ));
+        }
+        used[index] = true;
+        order.push(index);
+    }
+    if let Some(unused) = used.iter().position(|u| !u) {
+        return Err(error(
+            format!(
+                "bound parameter {:?} matches no placeholder",
+                schema.field(unused).name()
+            ),
+            Status::InvalidArguments,
+        ));
+    }
+    Ok(order)
+}
+
+/// Reorders `batch` for binding (see [`BindMode`]).
+pub(crate) fn for_binds(
+    bind_names: &[String],
+    batch: RecordBatch,
+    mode: BindMode,
+) -> Result<RecordBatch> {
+    let order = match mode {
+        BindMode::Auto => auto_order(bind_names, &batch.schema()),
+        BindMode::ByName => Some(name_order(bind_names, &batch.schema())?),
+        BindMode::ByPosition => None,
+    };
+    match order {
         Some(order) if order.iter().enumerate().any(|(i, &j)| i != j) => batch
             .project(&order)
             .map_err(|e| error(e.to_string(), Status::Internal)),
@@ -503,6 +563,78 @@ mod tests {
         .unwrap();
         assert_eq!(param_row(&batch, 0).unwrap().as_refs().len(), 2);
         assert_eq!(param_row(&batch, 1).unwrap().as_refs().len(), 2);
+    }
+
+    fn named(names: &[&str]) -> RecordBatch {
+        let fields: Vec<Field> = names
+            .iter()
+            .map(|n| Field::new(*n, DataType::Int32, true))
+            .collect();
+        let columns = (0..names.len())
+            .map(|i| Arc::new(Int32Array::from(vec![i as i32])) as _)
+            .collect();
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+    }
+
+    fn field_names(batch: &RecordBatch) -> Vec<String> {
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    }
+
+    fn binds(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn auto_binds_by_name_only_when_all_names_match() {
+        let reordered = for_binds(&binds(&["B", "A"]), named(&["a", "b"]), BindMode::Auto).unwrap();
+        assert_eq!(field_names(&reordered), ["b", "a"]);
+        let positional =
+            for_binds(&binds(&["1", "2"]), named(&["a", "b"]), BindMode::Auto).unwrap();
+        assert_eq!(field_names(&positional), ["a", "b"]);
+    }
+
+    #[test]
+    fn by_name_requires_a_one_to_one_match() {
+        let reordered =
+            for_binds(&binds(&["B", "A"]), named(&["a", "b"]), BindMode::ByName).unwrap();
+        assert_eq!(field_names(&reordered), ["b", "a"]);
+        for (placeholders, fields, message) in [
+            (
+                &["A", "C"][..],
+                &["a", "b"][..],
+                "no bound parameter is named \"C\"",
+            ),
+            (
+                &["A"][..],
+                &["a", "b"][..],
+                "bound parameter \"b\" matches no placeholder",
+            ),
+            (
+                &["A"][..],
+                &["a", "A"][..],
+                "several bound parameters match",
+            ),
+        ] {
+            let err = for_binds(&binds(placeholders), named(fields), BindMode::ByName).unwrap_err();
+            assert_eq!(err.status, Status::InvalidArguments);
+            assert!(err.message.contains(message), "{}", err.message);
+        }
+    }
+
+    #[test]
+    fn by_position_ignores_names() {
+        let kept = for_binds(
+            &binds(&["B", "A"]),
+            named(&["a", "b"]),
+            BindMode::ByPosition,
+        )
+        .unwrap();
+        assert_eq!(field_names(&kept), ["a", "b"]);
     }
 
     #[test]

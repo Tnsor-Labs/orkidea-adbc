@@ -28,7 +28,7 @@ use crate::config::{
 use crate::connection::ConnState;
 use crate::error::{error, expect_bool, expect_int, expect_string, from_oracle};
 use crate::ingest;
-use crate::params::{for_binds, param_row};
+use crate::params::{for_binds, param_row, BindMode};
 use crate::reader::{
     cursor_rows, fetched_rows, NoMoreRows, OracleBatchReader, QueuedRows, RowSource, Rows,
 };
@@ -39,6 +39,9 @@ pub(crate) const DEFAULT_BATCH_SIZE: usize = 8192;
 pub(crate) const OPT_PARTITION_COUNT: &str = "oracle.partition.count";
 pub(crate) const OPT_PARTITION_COLUMN: &str = "oracle.partition.column";
 pub(crate) const OPT_PARTITION_CONSISTENT: &str = "oracle.partition.consistent";
+/// ADBC 1.1 option: bind parameters by field name (`true`) or by position
+/// (`false`). The ADBC Python DB-API sets it for dict parameters.
+pub(crate) const OPT_BIND_BY_NAME: &str = "adbc.statement.bind_by_name";
 
 /// Round-trip tuning applied to each Oracle cursor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -178,6 +181,7 @@ pub struct OracleStatement {
     pub(crate) bound: Option<Bound>,
     pub(crate) prepared: bool,
     pub(crate) bind_names: Vec<String>,
+    pub(crate) bind_mode: BindMode,
     pub(crate) ingest_mode: Option<IngestMode>,
     pub(crate) target_table: Option<String>,
     pub(crate) target_catalog: Option<String>,
@@ -219,6 +223,7 @@ impl OracleStatement {
             bound: None,
             prepared: false,
             bind_names: Vec::new(),
+            bind_mode: BindMode::Auto,
             ingest_mode: None,
             target_table: None,
             target_catalog: None,
@@ -318,7 +323,11 @@ impl OracleStatement {
     fn ordered_params(&mut self, sql: &str) -> Result<Option<RecordBatch>> {
         match self.bound_params()? {
             None => Ok(None),
-            Some(batch) => Ok(Some(for_binds(&self.bind_names(sql)?, batch)?)),
+            Some(batch) => Ok(Some(for_binds(
+                &self.bind_names(sql)?,
+                batch,
+                self.bind_mode,
+            )?)),
         }
     }
 
@@ -540,8 +549,9 @@ impl OracleStatement {
                         .map_err(from_oracle)?;
                     stmt.bind_names().to_vec()
                 };
+                let mode = self.bind_mode;
                 let batches: BatchIter =
-                    Box::new(batches.map(move |b| b.and_then(|b| for_binds(&names, b))));
+                    Box::new(batches.map(move |b| b.and_then(|b| for_binds(&names, b, mode))));
                 execute_batches(&conn, sql, batches, self.batch_size)?
             }
         };
@@ -683,6 +693,14 @@ impl Optionable for OracleStatement {
                 self.partition_consistent = expect_bool(&value, key)?;
                 Ok(())
             }
+            OPT_BIND_BY_NAME => {
+                self.bind_mode = if expect_bool(&value, key)? {
+                    BindMode::ByName
+                } else {
+                    BindMode::ByPosition
+                };
+                Ok(())
+            }
             _ => Err(error(
                 format!("unknown Orkidea statement option {key:?}"),
                 Status::InvalidArguments,
@@ -707,6 +725,17 @@ impl Optionable for OracleStatement {
                 .clone()
                 .ok_or_else(|| error("partition column was not set", Status::NotFound)),
             OPT_PARTITION_CONSISTENT => Ok(self.partition_consistent.to_string()),
+            OPT_BIND_BY_NAME => match self.bind_mode {
+                BindMode::ByName => Ok("true".into()),
+                BindMode::ByPosition => Ok("false".into()),
+                BindMode::Auto => Err(error(
+                    format!(
+                        "{OPT_BIND_BY_NAME} was not set: parameters bind by name when every \
+                         placeholder matches a field name, otherwise by position"
+                    ),
+                    Status::NotFound,
+                )),
+            },
             _ => Err(error(
                 format!("unknown Orkidea string option {key:?}"),
                 Status::NotFound,
@@ -924,14 +953,13 @@ impl Statement for OracleStatement {
         Ok(())
     }
 
-    /// Setting a query switches the statement out of ingest mode. Data bound
-    /// for a previous ingest is dropped so it is not mistaken for query
-    /// parameters (DB-API cursors reuse one statement for both).
+    /// Setting a query starts over: it switches the statement out of ingest
+    /// mode and drops bound data, so parameters bound for a previous query or
+    /// ingest are not sent with this one (DB-API cursors reuse one statement
+    /// for everything). Bind parameters after setting the query.
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> Result<()> {
-        if self.ingest_mode.take().is_some() || self.target_table.is_some() {
-            self.clear_ingest();
-            self.bound = None;
-        }
+        self.clear_ingest();
+        self.bound = None;
         self.sql = Some(query.as_ref().to_string());
         self.prepared = false;
         self.bind_names.clear();

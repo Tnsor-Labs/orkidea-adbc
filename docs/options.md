@@ -73,6 +73,7 @@ the defaults for every statement. See [type-support.md](type-support.md).
 | Option | Description |
 | --- | --- |
 | `adbc.ingest.*` | Bulk ingestion; see [type-support.md](type-support.md#bulk-ingestion-arrow--oracle). |
+| `adbc.statement.bind_by_name` | `true` binds parameters by field name, `false` by position. When unset, parameters bind by name if every placeholder matches a field name. See [plsql.md](plsql.md#binding-parameters). |
 | `oracle.batch_size` | Rows per Arrow batch and per array-DML chunk (default 8192). |
 | `oracle.fetch_array_size`, `oracle.prefetch_rows` | Fetch round-trip tuning. |
 | `oracle.unconstrained_number`, `oracle.unconstrained_number_scale` | How `NUMBER` columns without a declared precision are read. |
