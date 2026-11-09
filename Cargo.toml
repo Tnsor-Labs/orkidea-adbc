@@ -19,7 +19,7 @@ adbc_ffi = "0.25"
 adbc_driver_manager = "0.25"
 arrow-array = "59"
 arrow-buffer = "59"
-arrow-schema = "59"
+arrow-schema = "60"
 arrow-select = "59"
 oracledb = { version = "=26.0.0-beta.5", features = ["arrow"] }
 

@@ -9,7 +9,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d1448c5d1597ce04cf1228e9e096dc4dc0dc0d568080283824125c60b22c325"
 dependencies = [
  "arrow-array",
- "arrow-schema",
+ "arrow-schema 60.1.0",
 ]
 
 [[package]]
@@ -21,7 +21,7 @@ dependencies = [
  "adbc_core",
  "adbc_ffi",
  "arrow-array",
- "arrow-schema",
+ "arrow-schema 60.1.0",
  "libloading",
  "path-slash",
  "regex",
@@ -38,7 +38,7 @@ checksum = "6e45d58b6adb27c160c8a67be956c1d260e90aad56e36e2a46f3bcffa914a8ab"
 dependencies = [
  "adbc_core",
  "arrow-array",
- "arrow-schema",
+ "arrow-schema 60.1.0",
 ]
 
 [[package]]
@@ -117,7 +117,7 @@ dependencies = [
  "ahash",
  "arrow-buffer",
  "arrow-data",
- "arrow-schema",
+ "arrow-schema 59.3.2",
  "chrono",
  "half",
  "hashbrown",
@@ -146,7 +146,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb0a031c7ff5e2bdb443117054fb466af1d4df5b7f0ecbe197713dc8b113b1ba"
 dependencies = [
  "arrow-buffer",
- "arrow-schema",
+ "arrow-schema 59.3.2",
  "half",
  "num-integer",
  "num-traits",
@@ -162,6 +162,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-schema"
+version = "60.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de2c8e714b466404cdc1189e89f892426efea614d938e16c15518c340cd43ba3"
+
+[[package]]
 name = "arrow-select"
 version = "59.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -171,7 +177,7 @@ dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-data",
- "arrow-schema",
+ "arrow-schema 59.3.2",
  "num-traits",
 ]
 
@@ -722,7 +728,7 @@ checksum = "27b98c7346f2bb5169ec4b2d4f066fb616529ac766b395440c5019fe88d1ef45"
 dependencies = [
  "aes",
  "arrow-array",
- "arrow-schema",
+ "arrow-schema 59.3.2",
  "base16ct",
  "base64ct",
  "cbc",
@@ -744,7 +750,7 @@ dependencies = [
  "adbc_core",
  "arrow-array",
  "arrow-buffer",
- "arrow-schema",
+ "arrow-schema 60.1.0",
  "arrow-select",
  "oracledb",
 ]
@@ -757,7 +763,7 @@ dependencies = [
  "adbc_driver_manager",
  "adbc_ffi",
  "arrow-array",
- "arrow-schema",
+ "arrow-schema 60.1.0",
  "orkidea-adbc",
 ]
 
