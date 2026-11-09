@@ -39,7 +39,7 @@ pub(crate) fn from_oracle(err: OracleError) -> AdbcError {
                 54 | 55 | 56 | 1013 => Status::Timeout,
                 1017 | 28000 | 28001 => Status::Unauthenticated,
                 1031 | 1034 | 1045 => Status::Unauthorized,
-                2290 | 2291 | 2292 => Status::Integrity,
+                2290..=2292 => Status::Integrity,
                 _ => Status::InvalidData,
             };
             (status, code as i32)

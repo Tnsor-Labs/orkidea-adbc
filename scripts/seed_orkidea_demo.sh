@@ -41,7 +41,7 @@ END;
 EXIT
 SQL
 
-docker exec -i "$container" sqlplus -s "${demo_user}/${demo_password}@${service}" < "$project_root/scripts/oracle_adbc_demo.sql"
+docker exec -i "$container" sqlplus -s "${demo_user}/${demo_password}@${service}" < "$project_root/scripts/orkidea_demo.sql"
 
 echo "Seeded Oracle user ${demo_user} on ${service}."
 echo "DuckDB URI: oracle://${demo_user}:<password>@127.0.0.1:1522/${service}"

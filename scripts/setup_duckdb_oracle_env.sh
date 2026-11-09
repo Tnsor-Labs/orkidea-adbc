@@ -23,9 +23,9 @@ export BROWSER=true
 export ORACLE_ODBC_CONN="DRIVER=${ORACLE_HOME}/lib/libsqora.so.21.1;DBQ=${ORACLE_HOST}:${ORACLE_PORT}/${ORACLE_SERVICE};UID=${ORACLE_USER};PWD=${ORACLE_PASSWORD};"
 
 # This URI is used by the Rust ADBC smoke tests. Passwords containing URI
-# punctuation should be percent-encoded before setting ORACLE_ADBC_URI.
-if [[ -z "${ORACLE_ADBC_URI:-}" ]]; then
-  export ORACLE_ADBC_URI="oracle://${ORACLE_USER}:${ORACLE_PASSWORD}@${ORACLE_HOST}:${ORACLE_PORT}/${ORACLE_SERVICE}"
+# punctuation should be percent-encoded before setting ORKIDEA_ADBC_URI.
+if [[ -z "${ORKIDEA_ADBC_URI:-}" ]]; then
+  export ORKIDEA_ADBC_URI="oracle://${ORACLE_USER}:${ORACLE_PASSWORD}@${ORACLE_HOST}:${ORACLE_PORT}/${ORACLE_SERVICE}"
 fi
 
 echo "Oracle/DuckDB environment exported for ${ORACLE_USER}@${ORACLE_HOST}:${ORACLE_PORT}/${ORACLE_SERVICE}"

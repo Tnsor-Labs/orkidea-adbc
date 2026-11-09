@@ -283,17 +283,17 @@ static void query_bind(duckdb_bind_info info) {
     }
 
     auto *state = new OracleAdbcQueryState();
-    const char *library_path = std::getenv("ORACLE_ADBC_LIBRARY");
+    const char *library_path = std::getenv("ORKIDEA_ADBC_LIBRARY");
     if (!library_path) {
         duckdb_free(sql);
         duckdb_free(uri);
         delete state;
-        duckdb_bind_set_error(info, "ORACLE_ADBC_LIBRARY must point to libadbc_driver_orkidea.so");
+        duckdb_bind_set_error(info, "ORKIDEA_ADBC_LIBRARY must point to libadbc_driver_orkidea.so");
         return;
     }
     state->library = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
     if (!state->library) {
-        std::string message = "failed to load ORACLE_ADBC_LIBRARY: ";
+        std::string message = "failed to load ORKIDEA_ADBC_LIBRARY: ";
         message += dlerror();
         duckdb_free(sql);
         duckdb_free(uri);
@@ -306,7 +306,7 @@ static void query_bind(duckdb_bind_info info) {
         duckdb_free(sql);
         duckdb_free(uri);
         release_query_state(state);
-        duckdb_bind_set_error(info, "ORACLE_ADBC_LIBRARY lacks OrkideaDriverInit");
+        duckdb_bind_set_error(info, "ORKIDEA_ADBC_LIBRARY lacks OrkideaDriverInit");
         return;
     }
 

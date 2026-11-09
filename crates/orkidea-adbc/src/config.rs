@@ -67,7 +67,7 @@ impl DbOptions {
         if !KNOWN_OPTIONS.contains(&key) {
             return Err(error(
                 format!(
-                    "unknown Oracle Arrow database option {key:?}; supported options: {}",
+                    "unknown Orkidea database option {key:?}; supported options: {}",
                     KNOWN_OPTIONS.join(", ")
                 ),
                 Status::InvalidArguments,
@@ -112,28 +112,6 @@ impl DbOptions {
     pub(crate) fn get_i64(&self, key: &str) -> Result<Option<i64>> {
         match self.values.get(key) {
             Some(v) => Ok(Some(expect_int(v, key)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) fn get_bytes(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        match self.values.get(key) {
-            Some(OptionValue::Bytes(v)) => Ok(Some(v.clone())),
-            Some(v) => Err(error(
-                format!("option {key:?} does not hold bytes: {v:?}"),
-                Status::InvalidArguments,
-            )),
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) fn get_double(&self, key: &str) -> Result<Option<f64>> {
-        match self.values.get(key) {
-            Some(OptionValue::Double(v)) => Ok(Some(*v)),
-            Some(v) => Err(error(
-                format!("option {key:?} does not hold a float: {v:?}"),
-                Status::InvalidArguments,
-            )),
             None => Ok(None),
         }
     }

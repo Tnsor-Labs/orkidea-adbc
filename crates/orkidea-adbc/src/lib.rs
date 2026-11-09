@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Arrow-native Oracle driver for ADBC.
+//! Oracle ADBC driver that converts query results to Arrow record batches.
 //!
 //! This crate implements the ADBC abstract API ([`adbc_core`]) on top of
 //! Oracle's official pure-Rust [`oracledb`] driver. Query results are produced

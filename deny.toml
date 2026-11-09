@@ -1,0 +1,42 @@
+# cargo-deny configuration. Run with: cargo deny --all-features check
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+# Fail on unmaintained crates anywhere in the dependency graph.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "UPL-1.0",
+    "Zlib",
+]
+
+# webpki-roots ships Mozilla's root CA bundle (used by oracledb for TLS) under
+# a permissive data license. Scoped to that crate only.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

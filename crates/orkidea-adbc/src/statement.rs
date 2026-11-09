@@ -97,11 +97,7 @@ impl OracleStatement {
     }
 
     fn ensure_writable(&self) -> Result<()> {
-        if self
-            .state
-            .read_only
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        if self.state.read_only() {
             return Err(error(
                 "connection is read-only; writes are not permitted",
                 Status::Unauthorized,
@@ -248,7 +244,7 @@ impl Optionable for OracleStatement {
                 Ok(())
             }
             _ => Err(error(
-                format!("unknown Oracle Arrow statement option {key:?}"),
+                format!("unknown Orkidea statement option {key:?}"),
                 Status::InvalidArguments,
             )),
         }
@@ -259,14 +255,14 @@ impl Optionable for OracleStatement {
         match key {
             adbc_core::constants::ADBC_INGEST_OPTION_MODE => self
                 .ingest_mode
-                .map(|m| String::from(m))
+                .map(String::from)
                 .ok_or_else(|| error("ingest mode was not set", Status::NotFound)),
             adbc_core::constants::ADBC_INGEST_OPTION_TARGET_TABLE => self
                 .target_table
                 .clone()
                 .ok_or_else(|| error("target table was not set", Status::NotFound)),
             _ => Err(error(
-                format!("unknown Oracle Arrow string option {key:?}"),
+                format!("unknown Orkidea string option {key:?}"),
                 Status::NotFound,
             )),
         }
@@ -286,7 +282,7 @@ impl Optionable for OracleStatement {
             "oracle.fetch_array_size" => Ok(self.fetch_array_size as i64),
             "oracle.prefetch_rows" => Ok(self.prefetch_rows as i64),
             _ => Err(error(
-                format!("unknown Oracle Arrow integer option {key:?}"),
+                format!("unknown Orkidea integer option {key:?}"),
                 Status::NotFound,
             )),
         }
@@ -349,14 +345,7 @@ impl Statement for OracleStatement {
                 .map_err(from_oracle)?
                 .rows_affected(),
         };
-        drop(conn);
-        if self
-            .state
-            .autocommit
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            self.state.lock()?.commit().map_err(from_oracle)?;
-        }
+        self.state.commit_if_autocommit(&conn)?;
         Ok(Some(affected.min(i64::MAX as u64) as i64))
     }
 
@@ -381,7 +370,7 @@ impl Statement for OracleStatement {
 
     fn execute_partitions(&mut self) -> Result<PartitionedResult> {
         Err(error(
-            "Oracle Arrow does not support partitioned execution",
+            "Orkidea does not support partitioned execution",
             Status::NotImplemented,
         ))
     }
@@ -425,7 +414,7 @@ impl Statement for OracleStatement {
 
     fn set_substrait_plan(&mut self, _plan: impl AsRef<[u8]>) -> Result<()> {
         Err(error(
-            "Substrait is not supported by the Oracle Arrow driver",
+            "Substrait is not supported by the Orkidea driver",
             Status::NotImplemented,
         ))
     }

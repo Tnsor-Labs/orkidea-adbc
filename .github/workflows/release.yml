@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # keyless Sigstore signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny --locked check
+      - run: cargo test --workspace --locked
+      - run: cargo build --locked --release -p orkidea-adbc-ffi
+      - uses: taiki-e/install-action@cargo-cyclonedx
+      - run: cargo cyclonedx --format json
+      - name: Assemble artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp target/release/libadbc_driver_orkidea.so artifacts/
+          cp crates/orkidea-adbc-ffi/orkidea-adbc-ffi.cdx.json artifacts/orkidea-sbom.cdx.json
+          cp LICENSE artifacts/LICENSE
+          # Third-party notices required by the oracledb license terms.
+          oracledb_dir="$(cargo metadata --locked --format-version 1 \
+            | jq -r '.packages[] | select(.name == "oracledb") | .manifest_path' \
+            | xargs dirname)"
+          cp "$oracledb_dir/LICENSE.txt" artifacts/THIRD_PARTY_oracledb_LICENSE.txt
+          cp "$oracledb_dir/NOTICE.txt" artifacts/THIRD_PARTY_oracledb_NOTICE.txt
+          (cd artifacts && sha256sum * > SHA256SUMS)
+      - uses: sigstore/cosign-installer@v3.7.0
+      - run: cosign sign-blob --yes --bundle artifacts/SHA256SUMS.sigstore.json artifacts/SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*

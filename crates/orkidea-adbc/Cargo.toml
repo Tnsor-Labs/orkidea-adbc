@@ -1,6 +1,6 @@
 [package]
 name = "orkidea-adbc"
-description = "Arrow-native Oracle ADBC driver built on Oracle's pure-Rust oracledb driver"
+description = "Oracle ADBC driver that converts query results to Arrow using Oracle's pure-Rust oracledb driver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

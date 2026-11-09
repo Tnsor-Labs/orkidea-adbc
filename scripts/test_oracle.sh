@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${ORACLE_ADBC_URI:?Set ORACLE_ADBC_URI, e.g. oracle://user:password@host:1521/service}"
+: "${ORKIDEA_ADBC_URI:?Set ORKIDEA_ADBC_URI, e.g. oracle://user:password@host:1521/service}"
 
 echo "Running Rust ADBC smoke tests"
 cargo test -p orkidea-adbc --test oracle_smoke -- --nocapture
 
-if [[ -n "${ORACLE_ADBC_EXTENSION:-}" ]]; then
+if [[ -n "${ORKIDEA_ADBC_EXTENSION:-}" ]]; then
   echo "Running DuckDB Orkidea integration tests"
   ./scripts/test_duckdb_orkidea.sh
 else
-  echo "ORACLE_ADBC_EXTENSION is not set; skipping DuckDB Orkidea test"
+  echo "ORKIDEA_ADBC_EXTENSION is not set; skipping DuckDB Orkidea test"
 fi
 
 if [[ -n "${ORACLE_ODBC_CONN:-}" ]]; then

@@ -7,7 +7,8 @@ organization's legal and compliance teams before external distribution.
 
 | Component | License / terms | Release implication |
 | --- | --- | --- |
-| Oracle `oracledb` Rust crate | UPL-1.0 or Apache-2.0 | Preserve the Oracle copyright and license notice when distributing code or binaries containing the crate. |
+| Oracle `rust-oracledb` Rust crate | UPL-1.0 OR Apache-2.0 (dual-licensed; ships LICENSE.txt and NOTICE.txt) | Preserve the Oracle copyright and license notice and verify the pinned beta dependency terms before distributing code or binaries containing the crate. |
+| `webpki-roots` (transitive, via `oracledb` TLS) | CDLA-Permissive-2.0 | Mozilla root CA data under a permissive data license; allowed by a crate-scoped exception in `deny.toml`. Preserve the license notice. |
 | ADBC core and FFI crates | Apache-2.0 | Preserve Apache notices and provide the applicable license text. |
 | DuckDB extension API/source | MIT | Preserve the DuckDB copyright and MIT notice for copied source or redistributed DuckDB binaries. |
 | Oracle Database server | Oracle proprietary license | Do not redistribute the server image, database files, passwords, or Oracle client binaries without an applicable Oracle agreement. |
@@ -16,12 +17,15 @@ organization's legal and compliance teams before external distribution.
 ## Required Before Internal Distribution
 
 - Generate a complete dependency license/notice report for the Rust workspace.
-- Include Oracle `oracledb`'s license notice in the driver distribution.
+- Include `rust-oracledb`'s selected license notice in the driver distribution.
 - Include Apache-2.0 notices for ADBC and transitive Apache-licensed components.
 - Decide whether the internal package links to or dynamically loads the Oracle ADBC library.
 - Keep Oracle credentials, wallets, database dumps, and client libraries out of source control and release artifacts.
 - Confirm the organization's Oracle contract permits the intended number of users, environments, and redistribution model.
 - Confirm whether the DuckDB UI binary and extension are distributed together or installed separately.
+- Confirm DuckDB extension signing, verification, and unsigned-development-mode boundaries.
+- Confirm the Orkidea name and documentation do not imply Oracle endorsement or affiliation.
+- Confirm release signing keys, SBOM publication, and checksum publication are controlled by the release process.
 
 ## Required Before Upstream Submission
 
@@ -30,3 +34,13 @@ organization's legal and compliance teams before external distribution.
 - Confirm contributor copyright/license requirements for the target DuckDB repository.
 - Provide tests that use a user-supplied Oracle service or a CI secret, not a bundled database.
 - Have legal review approve any Oracle product names, trademarks, and documentation language.
+
+## Demo Artifact Boundary
+
+- `scripts/seed_orkidea_demo.sh` may connect to a user-provided local
+  container, but it must not download, copy, or package an Oracle image into a
+  source archive, release artifact, SBOM, or container image.
+- Demo credentials are generated or supplied at runtime and must never be
+  committed.
+- The demo SQL and test data are synthetic and must not contain customer data,
+  database dumps, wallets, or proprietary schemas.

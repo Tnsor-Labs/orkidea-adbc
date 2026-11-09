@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${ORACLE_ADBC_URI:?Set ORACLE_ADBC_URI before running this test}"
+: "${ORKIDEA_ADBC_URI:?Set ORKIDEA_ADBC_URI before running this test}"
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-extension="${ORACLE_ADBC_EXTENSION:-/tmp/opencode/duckdb-v2.0.0/build/release/extension/orkidea_adbc/orkidea_adbc.duckdb_extension}"
-library="${ORACLE_ADBC_LIBRARY:-${root_dir}/target/release/libadbc_driver_orkidea.so}"
+extension="${ORKIDEA_ADBC_EXTENSION:-/tmp/opencode/duckdb-v2.0.0/build/release/extension/orkidea_adbc/orkidea_adbc.duckdb_extension}"
+library="${ORKIDEA_ADBC_LIBRARY:-${root_dir}/target/release/libadbc_driver_orkidea.so}"
 
-output="$(ORACLE_ADBC_LIBRARY="$library" duckdb -unsigned -no-agent -csv -c \
-    "LOAD '${extension}'; SELECT customer_id, name, city FROM orkidea_adbc_query('SELECT customer_id, name, city FROM customers ORDER BY customer_id', getenv('ORACLE_ADBC_URI'));" \
+output="$(ORKIDEA_ADBC_LIBRARY="$library" ORKIDEA_ADBC_URI="$ORKIDEA_ADBC_URI" duckdb -unsigned -no-agent -csv -c \
+    "LOAD '${extension}'; SELECT customer_id, name, city FROM orkidea_adbc_query('SELECT customer_id, name, city FROM customers ORDER BY customer_id', getenv('ORKIDEA_ADBC_URI'));" \
     2>&1)"
 
 case "$output" in
@@ -21,8 +21,8 @@ case "$output" in
         ;;
 esac
 
-types="$(ORACLE_ADBC_LIBRARY="$library" duckdb -unsigned -no-agent -csv -c \
-    "LOAD '${extension}'; SELECT * FROM orkidea_adbc_query('SELECT DATE ''2025-01-02'' AS d, CAST(123.45 AS NUMBER(10,2)) AS n, HEXTORAW(''0102'') AS raw_value FROM dual', getenv('ORACLE_ADBC_URI'));" \
+types="$(ORKIDEA_ADBC_LIBRARY="$library" ORKIDEA_ADBC_URI="$ORKIDEA_ADBC_URI" duckdb -unsigned -no-agent -csv -c \
+    "LOAD '${extension}'; SELECT * FROM orkidea_adbc_query('SELECT DATE ''2025-01-02'' AS d, CAST(123.45 AS NUMBER(10,2)) AS n, HEXTORAW(''0102'') AS raw_value FROM dual', getenv('ORKIDEA_ADBC_URI'));" \
     2>&1)"
 
 case "$types" in

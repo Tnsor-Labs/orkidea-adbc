@@ -41,6 +41,23 @@ impl ConnState {
             .lock()
             .map_err(|_| error("Oracle connection lock poisoned", Status::Internal))
     }
+
+    pub(crate) fn autocommit(&self) -> bool {
+        self.autocommit.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn read_only(&self) -> bool {
+        self.read_only.load(Ordering::Relaxed)
+    }
+
+    /// Commits on `conn` when autocommit is enabled. Takes the already-held
+    /// guard so the write and its commit happen under one lock acquisition.
+    pub(crate) fn commit_if_autocommit(&self, conn: &OracleConn) -> Result<()> {
+        if self.autocommit() {
+            conn.commit().map_err(from_oracle)?;
+        }
+        Ok(())
+    }
 }
 
 /// An ADBC connection backed by a single Oracle session.
@@ -70,18 +87,11 @@ impl OracleConnection {
     }
 
     pub(crate) fn autocommit(&self) -> bool {
-        self.state.autocommit.load(Ordering::Relaxed)
+        self.state.autocommit()
     }
 
     pub(crate) fn read_only(&self) -> bool {
-        self.state.read_only.load(Ordering::Relaxed)
-    }
-
-    pub(crate) fn commit_if_autocommit(&self) -> Result<()> {
-        if self.autocommit() {
-            self.state.lock()?.commit().map_err(from_oracle)?;
-        }
-        Ok(())
+        self.state.read_only()
     }
 }
 
@@ -155,7 +165,7 @@ impl Optionable for OracleConnection {
                 Ok(())
             }
             _ => Err(error(
-                format!("unknown Oracle Arrow connection option {key:?}"),
+                format!("unknown Orkidea connection option {key:?}"),
                 Status::InvalidArguments,
             )),
         }
@@ -185,7 +195,7 @@ impl Optionable for OracleConnection {
                 Ok(self.read_only().to_string())
             }
             _ => Err(error(
-                format!("unknown Oracle Arrow string option {key:?}"),
+                format!("unknown Orkidea string option {key:?}"),
                 Status::NotFound,
             )),
         }
@@ -287,7 +297,7 @@ impl Connection for OracleConnection {
         _partition: impl AsRef<[u8]>,
     ) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
         Err(error(
-            "Oracle Arrow does not implement partitioned execution; use execute()",
+            "Orkidea does not implement partitioned execution; use execute()",
             Status::NotImplemented,
         ))
     }

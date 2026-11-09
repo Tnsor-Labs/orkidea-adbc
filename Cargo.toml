@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/oracle-adbc",
-    "crates/oracle-adbc-ffi",
+    "crates/orkidea-adbc",
+    "crates/orkidea-adbc-ffi",
 ]
 
 [workspace.package]

@@ -11,7 +11,7 @@ if [[ ! -d "${DUCKDB_SOURCE}/.git" ]]; then
 fi
 
 rm -rf "${DUCKDB_SOURCE}/extension/orkidea_adbc"
-cp -R "${ROOT_DIR}/integrations/duckdb-oracle-adbc" "${DUCKDB_SOURCE}/extension/orkidea_adbc"
+cp -R "${ROOT_DIR}/integrations/duckdb-orkidea" "${DUCKDB_SOURCE}/extension/orkidea_adbc"
 printf '%s\n' 'duckdb_extension_load(orkidea_adbc)' > "${DUCKDB_SOURCE}/extension/extension_config_local.cmake"
 
 cmake -S "${DUCKDB_SOURCE}" -B "${DUCKDB_BUILD}" -G Ninja \

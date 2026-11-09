@@ -8,11 +8,11 @@ use arrow_schema::{DataType, Field, Schema};
 use orkidea_adbc::OracleDriver;
 
 fn database() -> Option<orkidea_adbc::OracleDatabase> {
-    let Ok(uri) = std::env::var("ORACLE_ADBC_URI") else {
-        eprintln!("skipping Oracle smoke test: ORACLE_ADBC_URI is not set");
+    let Ok(uri) = std::env::var("ORKIDEA_ADBC_URI") else {
+        eprintln!("skipping Oracle smoke test: ORKIDEA_ADBC_URI is not set");
         return None;
     };
-    let mut driver = OracleDriver::default();
+    let mut driver = OracleDriver;
     let mut database = driver.new_database().unwrap();
     database
         .set_option(OptionDatabase::Uri, uri.into())

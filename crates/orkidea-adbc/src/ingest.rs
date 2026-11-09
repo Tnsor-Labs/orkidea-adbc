@@ -14,7 +14,6 @@
 //! bind path.
 
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
 
 use adbc_core::error::{Result, Status};
 use adbc_core::options::IngestMode;
@@ -96,9 +95,7 @@ pub(crate) fn ingest(
             .map_err(from_oracle)?;
         offset += len;
     }
-    if state.autocommit.load(Ordering::Relaxed) {
-        conn.commit().map_err(from_oracle)?;
-    }
+    state.commit_if_autocommit(&conn)?;
     Ok(rows.min(i64::MAX as usize) as i64)
 }
 
@@ -324,7 +321,7 @@ fn ddl_type(data_type: &DataType) -> Result<String> {
         Null => "VARCHAR2(1)".to_string(),
         other => {
             return Err(error(
-                format!("Oracle Arrow cannot ingest Arrow type {other:?}"),
+                format!("Orkidea cannot ingest Arrow type {other:?}"),
                 Status::NotImplemented,
             ));
         }
