@@ -28,7 +28,13 @@ token is stored in the repository:
 3. Set `version` in the workspace `Cargo.toml` and run
    `cargo check --workspace` so `Cargo.lock` follows. The workflow refuses a
    tag that does not match this version.
-4. Optionally, run the workflow manually and check the `release` artifact.
+4. Write the release notes: rename `[Unreleased]` in `CHANGELOG.md` to
+   `## [<version>] - <date>` and start a new empty `[Unreleased]` above it.
+   Update the link references at the bottom. Preview the result with
+   `python3 scripts/release_notes.py <version>`. See
+   [Release notes](#release-notes) below.
+5. Optionally, run the workflow manually and check the `release` and
+   `release-notes` artifacts.
 
 Then tag and push:
 
@@ -39,15 +45,36 @@ git push origin v0.2.0
 
 Tags with a suffix (`v0.2.0-rc1`) are published as pre-releases.
 
+## Release notes
+
+The changelog section for a version is its release notes. It is written and
+reviewed with the rest of the release, before the tag, and published
+unchanged; nothing is edited on GitHub afterwards.
+`scripts/release_notes.py` adds install and verification instructions for
+that version.
+
+A section has:
+
+- an opening paragraph on what the release is about and how it was tested;
+- **"Behaviour changes to read before upgrading"**, always present: anything
+  that can change what existing code or data does, such as a type mapping, an
+  option default, or an error that used to be a success. When there are none,
+  it says so, because an empty section is a claim;
+- the changes, grouped by area (queries and types, parameters and PL/SQL,
+  ingestion, catalog, partitions, connections, Python, packaging). Each entry
+  starts with a bold summary of what changed for the user, not the commit
+  subject, and names its owner by GitHub handle (`-- @handle`);
+- known limitations, when they change.
+
 ## What the workflow does
 
 | Job | Purpose |
 | --- | --- |
-| `version check` | Reads the workspace version and checks the tag matches it. |
+| `version check` | Reads the workspace version and checks the tag matches it. Renders the release notes from `CHANGELOG.md`; a tag whose version has no changelog section fails here, before anything is built. |
 | `build (<platform>)` | Builds on a native runner for each platform. It then smoke-tests the packaged library through the ADBC driver manager, checks platform requirements, and tests the installer and manifest discovery end to end. It builds the Python wheel from the packaged library, checks its manylinux tag with `auditwheel` on Linux, and runs the Python tests against the installed wheel. |
 | `compat` | Loads the Linux libraries on Rocky Linux 8, Debian 11, and Amazon Linux 2023. |
 | `assemble` | Checks all six platforms and wheels are present, checks the wheels' metadata with `twine`, generates per-platform CycloneDX SBOMs, adds the installers, and writes `SHA256SUMS`. |
-| `publish` | Tags only. Signs `SHA256SUMS` with Sigstore (keyless), records GitHub build-provenance attestations, and creates the release. |
+| `publish` | Tags only. Signs `SHA256SUMS` with Sigstore (keyless), records GitHub build-provenance attestations, and creates the release with the rendered notes. |
 | `publish to PyPI` | Tags only, after `publish`. Uploads the wheels with trusted publishing, which adds PEP 740 attestations. If it fails (for example, before the one-time setup), fix the cause and re-run this job alone. |
 
 | Platform | Runner | Notes |

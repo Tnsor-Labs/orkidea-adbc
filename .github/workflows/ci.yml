@@ -117,9 +117,14 @@ jobs:
           bash -n scripts/*.sh
           shellcheck scripts/install.sh
           python3 -c "import ast, sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" \
-            scripts/package_release.py python/build_backend.py python/adbc_driver_orkidea/*.py python/tests/*.py
+            scripts/package_release.py scripts/release_notes.py python/build_backend.py python/adbc_driver_orkidea/*.py python/tests/*.py
           # shellcheck disable=SC2016 # PowerShell variables, not shell ones
           pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e | ForEach-Object { $_.ToString() }; exit 1 }'
+      - name: Check the changelog renders release notes for the current version
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          python3 scripts/release_notes.py "${version}" > /dev/null \
+            || echo "::warning::CHANGELOG.md has no section for ${version} yet; add it before tagging"
       - name: Lint the Python package
         run: |
           pipx run ruff==0.17.4 check python

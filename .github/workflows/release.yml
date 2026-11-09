@@ -37,6 +37,24 @@ jobs:
             exit 1
           fi
           echo "releasing ${version}"
+      - name: Write the release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          if python3 scripts/release_notes.py "${VERSION}" > release-notes.md; then
+            cat release-notes.md
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            exit 1
+          else
+            echo "::warning::CHANGELOG.md has no notes for ${VERSION}; a tag would fail here"
+            echo "No notes for ${VERSION}." > release-notes.md
+          fi
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
 
   build:
     name: build (${{ matrix.platform }})
@@ -324,6 +342,10 @@ jobs:
         with:
           name: release
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - name: Sign the checksums
         run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
@@ -338,7 +360,7 @@ jobs:
           flags=()
           [[ "${GITHUB_REF_NAME}" == *-* ]] && flags+=(--prerelease)
           gh release create "${GITHUB_REF_NAME}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" --verify-tag --generate-notes \
+            --repo "${GITHUB_REPOSITORY}" --verify-tag --notes-file notes/release-notes.md \
             --title "Orkidea ADBC ${GITHUB_REF_NAME}" "${flags[@]}"
 
   pypi:

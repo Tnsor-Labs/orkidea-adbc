@@ -1,0 +1,162 @@
+# Changelog
+
+All notable changes to Orkidea ADBC are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project follows [Semantic Versioning](https://semver.org/). Before
+1.0, a minor release may change the public API or a type mapping; such
+changes are listed under "Behaviour changes".
+
+Every entry names its owner by GitHub handle. The section for a version is
+published as its GitHub release notes, so it is written before the tag is
+pushed (see [docs/release.md](docs/release.md)).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-11-09
+
+The first release of Orkidea, an ADBC driver for Oracle Database written in
+Rust. Query results arrive as Arrow record batches, streamed in bounded
+batches. The driver speaks Oracle's network protocol directly, so it needs no
+Oracle Instant Client, OCI, or ODBC. It is published for Linux, macOS, and
+Windows on x86_64 and arm64, as release archives for any ADBC client and as
+Python wheels on PyPI (`pip install "adbc-driver-orkidea[dbapi]"`).
+
+The driver is tested against Oracle Database Free 23ai: the Rust suite, and
+the Python suite with the oldest and newest supported Python dependencies.
+Every release build is also loaded and tested on its own platform, and the
+Linux builds on Rocky Linux 8, Debian 11, and Amazon Linux 2023.
+
+### Behaviour changes to read before upgrading
+
+None: this is the first release. Until 1.0, type mappings and options may
+still change between minor releases; each change will be listed here.
+
+### Queries and types
+
+- **Streaming results** -- @hc12r. A query is read in batches of
+  `oracle.batch_size` rows (default 8192) as the client consumes them, so a
+  large result is never held in memory at once. Fetch round trips are tuned
+  with `oracle.fetch_array_size` and `oracle.prefetch_rows`.
+- **Exact type mapping** -- @hc12r. `NUMBER(p,s)` becomes the narrowest
+  integer or an exact decimal; `TIMESTAMP WITH TIME ZONE` becomes a UTC
+  instant; intervals, `JSON` (with the `arrow.json` extension), `VECTOR`,
+  `BOOLEAN`, LOBs, and `ROWID` all have a mapping. Dates before 1582 and BC
+  dates follow Oracle's own calendar, checked against the database's date
+  arithmetic. Every column carries its declared Oracle type in field metadata
+  (`oracle.type-name`). See [docs/type-support.md](docs/type-support.md).
+- **Unconstrained `NUMBER`** -- @hc12r. `NUMBER` without a precision reads as
+  `float64` by default, like python-oracledb, or as an exact `decimal` or as
+  `string` with `oracle.unconstrained_number`. The decimal mode fails rather
+  than round a value.
+- **Unsupported types fail early** -- @hc12r. `XMLTYPE`, `BFILE`, object and
+  collection types fail before any row is fetched, with a SQL workaround in
+  the message.
+- **Schema without execution** -- @hc12r. `execute_schema` reports exactly the
+  schema `execute` would produce.
+
+### Parameters and PL/SQL
+
+- **Parameterized statements** -- @hc12r. A bound batch runs the statement
+  once per row; DML runs as array DML in chunks. Parameters bind by name when
+  every placeholder matches a field name, otherwise by position, and
+  `adbc.statement.bind_by_name` makes the choice explicit.
+- **PL/SQL outputs** -- @hc12r. OUT and IN OUT parameters come back as a
+  result row, a REF CURSOR OUT parameter streams as the result set, and
+  `RETURNING ... INTO` returns the affected rows. Field metadata
+  `oracle.bind_type` gives a NULL OUT parameter its Oracle type. See
+  [docs/plsql.md](docs/plsql.md).
+- **Vectors** -- @hc12r. `VECTOR` parameters bind from Arrow lists, for
+  similarity search and embedding loads.
+
+### Bulk ingestion
+
+- **All four ingest modes** -- @hc12r. `create`, `append`, `create_append`,
+  and `replace`, from a batch or a stream that is read as rows are inserted.
+- **All or nothing** -- @hc12r. A failed ingest rolls back every row it
+  inserted and names the failing row range. A failed `create` drops the table
+  it created, and `replace` swaps the new table in only after a complete
+  load, leaving the original untouched on failure.
+- **Temporary tables** -- @hc12r. Temporary ingests use global temporary
+  tables, or private temporary tables for `ORA$PTT_` names.
+
+### Catalog metadata
+
+- **`get_objects` at every depth** -- @hc12r. Schemas, tables, views,
+  materialized views, and temporary tables; columns with ODBC-style metadata
+  (sizes, defaults, comments, identity and virtual columns); and primary key,
+  unique, foreign key, and check constraints. See
+  [docs/catalog.md](docs/catalog.md).
+- **`get_statistics`** -- @hc12r, from Oracle optimizer statistics: row count,
+  distinct count, null count, and average width.
+- **`get_info`, `get_table_schema`, and `get_table_types`** -- @hc12r,
+  including the server version and the connected container as the current
+  catalog.
+
+### Partitioned reads
+
+- **`execute_partitions`** -- @hc12r. A query splits into up to 4096 hash
+  partitions on a chosen column, and any connection, thread, process, or
+  machine can read a partition. With `oracle.partition.consistent`, every
+  partition reads one snapshot through Flashback Query. See
+  [docs/partitions.md](docs/partitions.md).
+
+### Connections and options
+
+- **Connecting** -- @hc12r. `oracle://` and `oracle+tcps://` URIs, Easy
+  Connect strings, TNS descriptors and `tnsnames.ora` aliases, PEM wallets
+  for TLS and mutual TLS, DRCP connection classes, privileged connections
+  (`sysdba` and others), and password change on connect.
+- **Session and tracing** -- @hc12r. Session time zone, edition, client
+  identity in `V$SESSION`, end-to-end tracing attributes that can change at
+  any time, call and connect timeouts, transactions with autocommit,
+  read-only connections, and isolation levels. See
+  [docs/options.md](docs/options.md).
+- **Secrets stay secret** -- @hc12r. Passwords are write-only options, and
+  reading `uri` back masks its password.
+
+### Python
+
+- **`adbc-driver-orkidea` on PyPI** -- @hc12r. A DB-API 2.0 interface
+  (`adbc_driver_orkidea.dbapi`, with Oracle's `:name` placeholders) and the
+  low-level `connect()`, with the driver bundled in the wheel. Option enums
+  cover every driver option. One wheel per platform works with any Python
+  3.10 or newer. The DB-API needs adbc-driver-manager 1.8 and pyarrow 16 or
+  newer. See [python/README.md](python/README.md).
+
+### Packaging and supply chain
+
+- **Six platforms** -- @hc12r. Linux (glibc 2.28 and newer), macOS 11 and
+  newer (ad-hoc signed), and Windows, each on x86_64 and arm64, built on
+  native runners.
+- **Installers** -- @hc12r. `install.sh` and `install.ps1` download a
+  release, verify it, and register driver `orkidea` with the ADBC driver
+  manager.
+- **Verifiable releases** -- @hc12r. `SHA256SUMS` is signed keylessly with
+  Sigstore, every asset has a GitHub build-provenance attestation and a
+  CycloneDX SBOM, and the wheels carry PEP 740 attestations from PyPI.
+  Archives and wheels include the license and notice files of every crate
+  compiled into the driver. Debug symbols ship as separate archives.
+
+### Known limitations
+
+- The driver is built on the `oracledb` crate 26.0.0-beta.5, a beta.
+- Statement cancellation and Substrait are not implemented; use
+  `oracle.call_timeout_ms` to bound a call.
+- Proxy authentication is unavailable because of an upstream logon bug
+  ([oracle/rust-oracledb#56](https://github.com/oracle/rust-oracledb/issues/56)).
+  Token, IAM, Kerberos, and external authentication, `cwallet.sso` wallets,
+  and Easy Connect `?key=value` parameters are not supported by `oracledb`
+  yet.
+- A `VECTOR` parameter must follow every other placeholder unless it is small
+  enough to send as text, because of an upstream bind bug
+  ([oracle/rust-oracledb#79](https://github.com/oracle/rust-oracledb/issues/79)).
+  Ingest orders vector columns itself.
+- macOS libraries are not notarized. Installs through the installers or pip
+  are not affected; a library downloaded with a browser may be blocked by
+  Gatekeeper.
+- pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
+  a pyarrow built from source. The low-level API works without it.
+
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Tnsor-Labs/orkidea-adbc/releases/tag/v0.1.0
