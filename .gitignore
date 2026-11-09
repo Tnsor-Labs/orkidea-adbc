@@ -7,3 +7,10 @@
 *.duckdb.wal
 .DS_Store
 *.cdx.json
+__pycache__/
+*.py[cod]
+/python/build/
+/wheels/
+/.wheel-input/
+/.wheel-venv/
+/.venv*/

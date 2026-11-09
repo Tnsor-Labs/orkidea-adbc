@@ -59,6 +59,26 @@ ORKIDEA_ADBC_URI="oracle://orkidea_test:$password@127.0.0.1:1521/FREEPDB1" \
   cargo test --workspace
 ```
 
+## Python Package
+
+The `adbc-driver-orkidea` package lives in `python/`. Its build backend
+bundles the library from `target/release` (or `ORKIDEA_ADBC_LIBRARY`):
+
+```bash
+cargo build --release -p orkidea-adbc-ffi
+python3 -m venv .venv
+.venv/bin/pip install "./python[test]"
+.venv/bin/python -I -m pytest python/tests
+```
+
+Run pytest with `-I`, so the tests import the installed package (with its
+bundled library) rather than the source tree. `test_live.py` runs when
+`ORKIDEA_ADBC_URI` is set; it creates and drops tables named
+`ORKIDEA_PY_*`. There is no editable install: reinstall after changing the
+package or rebuilding the library.
+
+## DuckDB
+
 The DuckDB integration test expects a user-supplied Oracle URI and a built
 extension:
 

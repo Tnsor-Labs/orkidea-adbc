@@ -1,0 +1,52 @@
+[build-system]
+# The in-tree backend (build_backend.py) packages a prebuilt driver library
+# into a wheel. It uses only the standard library.
+requires = []
+build-backend = "build_backend"
+backend-path = ["."]
+
+[project]
+name = "adbc-driver-orkidea"
+dynamic = ["version"] # the workspace version in ../Cargo.toml
+description = "Orkidea: an ADBC driver for Oracle Database, with no Oracle Client libraries required"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Tnsor Labs" }]
+keywords = ["adbc", "arrow", "oracle", "database", "dbapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+dependencies = ["adbc-driver-manager>=1.8"] # 1.8 binds dict parameters by name
+
+[project.optional-dependencies]
+dbapi = ["pyarrow>=16"] # 16 converts dict parameters
+test = ["pyarrow>=16", "pytest>=7"]
+
+[project.urls]
+Repository = "https://github.com/Tnsor-Labs/orkidea-adbc"
+Documentation = "https://github.com/Tnsor-Labs/orkidea-adbc/tree/main/docs"
+Issues = "https://github.com/Tnsor-Labs/orkidea-adbc/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP", "W"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["adbc_driver_orkidea"]
+# The build backend runs on Python 3.11+, where tomllib is standard.
+extra-standard-library = ["tomllib"]

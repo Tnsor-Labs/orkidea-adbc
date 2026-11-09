@@ -26,9 +26,10 @@ The driver is built on [`rust-oracledb`](https://github.com/oracle/rust-oracledb
 currently pinned to the beta dependency `26.0.0-beta.5`. Review that dependency
 and its license terms before adopting Orkidea.
 
-Current validation is Linux amd64 against Oracle Database Free 23.26.3.0.0.
-macOS, Windows, Linux arm64, and macOS arm64 are build targets but are not yet
-covered by CI or release validation.
+CI runs the Rust and Python test suites on Linux amd64 against Oracle
+Database Free 23ai, with the oldest and newest supported Python
+dependencies. Every release build is also loaded and tested on its own
+platform (Linux, macOS, and Windows, on x86_64 and arm64) without a database.
 
 ## Implemented ADBC Surface
 
@@ -82,8 +83,23 @@ server-management features are outside the model ADBC exposes.
 ## Install
 
 Prebuilt drivers are published for Linux (glibc 2.28+), macOS 11+, and
-Windows, on x86_64 and arm64. The installers download a release, verify it,
-and register driver `orkidea` with the ADBC driver manager:
+Windows, on x86_64 and arm64.
+
+### Python
+
+```bash
+pip install "adbc-driver-orkidea[dbapi]"
+```
+
+The wheel bundles the driver. The `dbapi` extra installs `pyarrow` (16 or
+newer), which the DB-API interface needs. pyarrow publishes no wheels for
+Windows arm64, so there the DB-API needs a pyarrow built from source. The
+low-level `adbc_driver_orkidea.connect()` API works without it.
+
+### Other ADBC clients
+
+The installers download a release, verify it, and register driver `orkidea`
+with the ADBC driver manager:
 
 ```bash
 # Linux and macOS
@@ -136,23 +152,35 @@ are not resolved against the manifest's location.
 
 ## ADBC Usage
 
-Install the manifest and library in the locations used by your ADBC driver
-manager, then use the short name `orkidea`.
+Python, with the `adbc-driver-orkidea` package:
 
-Python:
+```python
+from adbc_driver_orkidea import dbapi
+
+with dbapi.connect(
+    "oracle://user@host:1521/service",
+    db_kwargs={"password": "..."},
+) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT customer_id, name FROM customers WHERE region = :region",
+                    {"region": "EMEA"})
+        table = cur.fetch_arrow_table()
+```
+
+A `dict` of parameters binds by name and a sequence by position. See
+[python/README.md](python/README.md) for ingestion and driver options.
+
+Any other ADBC client can load the driver through a manifest registered by
+the installers, under the short name `orkidea`:
 
 ```python
 import adbc_driver_manager.dbapi
 
 with adbc_driver_manager.dbapi.connect(
     driver="orkidea",
-    db_kwargs={
-        "uri": "oracle://user:password@host:1521/service",
-    },
+    db_kwargs={"uri": "oracle://user@host:1521/service", "password": "..."},
 ) as conn:
-    with conn.cursor() as cur:
-        cur.execute("SELECT customer_id, name FROM customers")
-        print(cur.fetchall())
+    ...
 ```
 
 Prefer separate `username` and `password` options or a driver-manager profile
@@ -214,6 +242,9 @@ Supply-chain controls:
   [`cargo-audit`](https://github.com/rustsec/rustsec) with warnings denied.
 - GitHub Actions are pinned to commit SHAs and container images to digests;
   Dependabot proposes updates.
+- Python wheels are published to PyPI with trusted publishing (no stored
+  API token) and carry PEP 740 attestations. Each wheel bundles the same
+  library as the release archive for its platform.
 - Every release asset has a per-platform CycloneDX SBOM, a SHA-256 checksum
   in `SHA256SUMS` (signed keylessly with Sigstore `cosign`), and a GitHub
   build-provenance attestation. Verify with:
@@ -227,8 +258,8 @@ Supply-chain controls:
   gh attestation verify <asset> --repo Tnsor-Labs/orkidea-adbc
   ```
 
-Release archives contain only the driver library, license and
-third-party notice files, and a README. They never include Oracle client
+Release archives and wheels contain only the driver library, license and
+third-party notice files, and a README or the Python package. They never include Oracle client
 libraries, database images, wallets, credentials, or local DuckDB build
 directories.
 

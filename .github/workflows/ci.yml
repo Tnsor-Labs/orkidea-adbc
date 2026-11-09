@@ -38,6 +38,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # The oldest and newest supported Python versions.
+          python-version: |
+            3.10
+            3.14
       - name: Start Oracle Database Free
         run: |
           set -euo pipefail
@@ -75,6 +81,23 @@ jobs:
           SQL
       - name: Run tests against Oracle
         run: cargo test --workspace --locked
+      - name: Build the Python wheel
+        run: |
+          cargo build --locked -p orkidea-adbc-ffi
+          ORKIDEA_ADBC_LIBRARY="${PWD}/target/debug/libadbc_driver_orkidea.so" \
+            python3.14 -m pip wheel --no-deps --wheel-dir wheels ./python
+      - name: Run the Python tests against Oracle (newest dependencies)
+        run: |
+          python3.14 -m venv .venv-newest
+          .venv-newest/bin/python -m pip install "$(ls wheels/*.whl)[test]"
+          .venv-newest/bin/python -I -m pytest -p no:cacheprovider -rs python/tests
+      - name: Run the Python tests against Oracle (oldest supported dependencies)
+        run: |
+          python3.10 -m venv .venv-oldest
+          # Keep in step with the minimums in python/pyproject.toml.
+          .venv-oldest/bin/python -m pip install "$(ls wheels/*.whl)" \
+            adbc-driver-manager==1.8.0 pyarrow==16.0.0 'numpy<2' pytest==7.0.0
+          .venv-oldest/bin/python -I -m pytest -p no:cacheprovider -rs python/tests
 
   msrv:
     runs-on: ubuntu-latest
@@ -93,9 +116,14 @@ jobs:
         run: |
           bash -n scripts/*.sh
           shellcheck scripts/install.sh
-          python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])" scripts/package_release.py
+          python3 -c "import ast, sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" \
+            scripts/package_release.py python/build_backend.py python/adbc_driver_orkidea/*.py python/tests/*.py
           # shellcheck disable=SC2016 # PowerShell variables, not shell ones
           pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e | ForEach-Object { $_.ToString() }; exit 1 }'
+      - name: Lint the Python package
+        run: |
+          pipx run ruff==0.17.4 check python
+          pipx run ruff==0.17.4 format --check python
       - name: Check for committed local credentials
         run: |
           ! git grep -n -E 'Oracle123|AdbcDemo123|Arrow123' -- . ':!Cargo.lock' ':!.github/workflows/ci.yml'

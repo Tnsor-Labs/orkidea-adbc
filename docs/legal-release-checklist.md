@@ -23,6 +23,10 @@ organization's legal and compliance teams before external distribution.
   `INDEX.txt`. Crates that ship no license file are listed separately;
   confirm their declared license text is otherwise provided (for example,
   Apache-2.0 via `LICENSE`).
+- Confirm each Python wheel carries the same `THIRD_PARTY_LICENSES/` files
+  as the release archive for its platform, under
+  `adbc_driver_orkidea-<version>.dist-info/licenses/`, together with
+  `LICENSE`.
 - Confirm the per-platform CycloneDX SBOMs match the bundled crates.
 - Decide whether the internal package links to or dynamically loads the Oracle ADBC library.
 - Keep Oracle credentials, wallets, database dumps, and client libraries out of source control and release artifacts.
