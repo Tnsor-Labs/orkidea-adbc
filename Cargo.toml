@@ -27,3 +27,9 @@ oracledb = { version = "=26.0.0-beta.5", features = ["arrow"] }
 lto = "thin"
 codegen-units = 1
 strip = false
+
+# Release artifacts: line-level debug info is built in, then split into a
+# separate debug-symbols archive by scripts/package_release.py.
+[profile.dist]
+inherits = "release"
+debug = "line-tables-only"

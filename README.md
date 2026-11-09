@@ -79,15 +79,42 @@ Substrait, statement cancellation, and proxy authentication are not
 implemented. Scheduler jobs and other
 server-management features are outside the model ADBC exposes.
 
+## Install
+
+Prebuilt drivers are published for Linux (glibc 2.28+), macOS 11+, and
+Windows, on x86_64 and arm64. The installers download a release, verify it,
+and register driver `orkidea` with the ADBC driver manager:
+
+```bash
+# Linux and macOS
+curl -fsSL https://github.com/Tnsor-Labs/orkidea-adbc/releases/latest/download/install.sh | sh
+```
+
+```powershell
+# Windows
+irm https://github.com/Tnsor-Labs/orkidea-adbc/releases/latest/download/install.ps1 | iex
+```
+
+Pass `--version v0.2.0` (`-Version` on Windows) to pin a release. On Linux
+and macOS, `--system` installs for all users. Every download is checked
+against the release's `SHA256SUMS`, and its Sigstore signature is verified
+when `cosign` is installed. See [docs/release.md](docs/release.md) for the
+release assets and how to verify them yourself.
+
+The installer writes a driver manifest to the per-user ADBC directory
+(`~/.config/adbc/drivers`, `~/Library/Application Support/ADBC/Drivers`, or
+`%LOCALAPPDATA%\ADBC\Drivers`).
+
 ## Build
 
 ```bash
 cargo build --locked --release -p orkidea-adbc-ffi
 ```
 
-The shared library is emitted under `target/release/` using the platform's
-native extension. The ADBC manifest example is
-`packaging/orkidea.toml.example`:
+The shared library is emitted under `target/release/`, with the platform's
+native extension. To use a local build, write a manifest like
+`packaging/orkidea.toml.example` with the absolute path of the library. The
+manifest can list one library per platform:
 
 ```toml
 manifest_version = 1
@@ -95,12 +122,17 @@ name = "orkidea"
 version = "0.1.0"
 
 [Driver]
-shared = "/absolute/path/to/libadbc_driver_orkidea.so"
 entrypoint = "OrkideaDriverInit"
+
+[Driver.shared]
+linux_amd64 = "/absolute/path/to/libadbc_driver_orkidea.so"
+macos_arm64 = "/absolute/path/to/libadbc_driver_orkidea.dylib"
+windows_amd64 = 'C:\path\to\adbc_driver_orkidea.dll'
 ```
 
-The path and extension must be changed for the target platform and install
-location.
+Put the manifest in one of the directories above, or point
+`ADBC_DRIVER_PATH` at the directory that contains it. Relative library paths
+are not resolved against the manifest's location.
 
 ## ADBC Usage
 
@@ -180,20 +212,23 @@ Supply-chain controls:
   (advisories, license allow-list, banned wildcards, crates.io-only sources;
   see `deny.toml`) and
   [`cargo-audit`](https://github.com/rustsec/rustsec) with warnings denied.
-- A CycloneDX SBOM is generated on every CI run and attached to each release.
-- Tagged releases publish `SHA256SUMS`, signed keylessly with Sigstore
-  `cosign`. Verify with:
+- GitHub Actions are pinned to commit SHAs and container images to digests;
+  Dependabot proposes updates.
+- Every release asset has a per-platform CycloneDX SBOM, a SHA-256 checksum
+  in `SHA256SUMS` (signed keylessly with Sigstore `cosign`), and a GitHub
+  build-provenance attestation. Verify with:
 
   ```bash
   cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-    --certificate-identity-regexp 'https://github.com/Tnsor-Labs/orkidea-adbc/' \
+    --certificate-identity-regexp '^https://github.com/Tnsor-Labs/orkidea-adbc/\.github/workflows/release\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     SHA256SUMS
-  sha256sum -c SHA256SUMS
+  sha256sum --ignore-missing -c SHA256SUMS
+  gh attestation verify <asset> --repo Tnsor-Labs/orkidea-adbc
   ```
 
-Release artifacts contain only the driver library, the SBOM, license and
-third-party notice files, and checksums. They never include Oracle client
+Release archives contain only the driver library, license and
+third-party notice files, and a README. They never include Oracle client
 libraries, database images, wallets, credentials, or local DuckDB build
 directories.
 

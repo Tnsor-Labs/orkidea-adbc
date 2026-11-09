@@ -16,16 +16,25 @@ organization's legal and compliance teams before external distribution.
 
 ## Required Before Internal Distribution
 
-- Generate a complete dependency license/notice report for the Rust workspace.
-- Include `rust-oracledb`'s selected license notice in the driver distribution.
-- Include Apache-2.0 notices for ADBC and transitive Apache-licensed components.
+- Review the `THIRD_PARTY_LICENSES/` directory of one release archive per
+  platform. `scripts/package_release.py` copies the license and notice files
+  of every crate compiled into the driver for that target, including
+  `rust-oracledb`'s, and lists each crate with its declared license in
+  `INDEX.txt`. Crates that ship no license file are listed separately;
+  confirm their declared license text is otherwise provided (for example,
+  Apache-2.0 via `LICENSE`).
+- Confirm the per-platform CycloneDX SBOMs match the bundled crates.
 - Decide whether the internal package links to or dynamically loads the Oracle ADBC library.
 - Keep Oracle credentials, wallets, database dumps, and client libraries out of source control and release artifacts.
 - Confirm the organization's Oracle contract permits the intended number of users, environments, and redistribution model.
 - Confirm whether the DuckDB UI binary and extension are distributed together or installed separately.
 - Confirm DuckDB extension signing, verification, and unsigned-development-mode boundaries.
 - Confirm the Orkidea name and documentation do not imply Oracle endorsement or affiliation.
-- Confirm release signing keys, SBOM publication, and checksum publication are controlled by the release process.
+- Release signing is keyless (Sigstore, bound to `release.yml` on a `v*`
+  tag) and build provenance is attested by GitHub; confirm only maintainers
+  can push release tags (protect `v*` tags).
+- Confirm the installers (`install.sh`, `install.ps1`) only download from
+  this repository's releases and verify checksums before installing.
 
 ## Required Before Upstream Submission
 

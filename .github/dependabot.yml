@@ -1,0 +1,20 @@
+# Keeps the commit-SHA pins of GitHub Actions and the Cargo dependencies
+# current. Updates arrive as pull requests, so CI and review gate every
+# change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ['*']
+        update-types: [minor, patch]

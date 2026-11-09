@@ -1,7 +1,13 @@
+# ADBC driver manifest for a locally built driver. The release installers
+# (scripts/install.sh, scripts/install.ps1) write this file automatically.
+# Library paths must be absolute. Keys are <os>_<arch>: linux, macos, or
+# windows, and amd64 or arm64.
 manifest_version = 1
 name = "orkidea"
 version = "0.1.0"
 
 [Driver]
-shared = "/absolute/path/to/libadbc_driver_orkidea.so"
 entrypoint = "OrkideaDriverInit"
+
+[Driver.shared]
+linux_amd64 = "/absolute/path/to/libadbc_driver_orkidea.so"
