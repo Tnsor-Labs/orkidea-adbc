@@ -12,9 +12,9 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef, UnionFields, UnionMode};
 
-use crate::arrow_schema::schema_from_metadata;
 use crate::connection::ConnState;
 use crate::error::{error, from_oracle};
+use crate::types::schema_from_metadata;
 
 fn empty_reader(schema: SchemaRef) -> Box<dyn RecordBatchReader + Send + 'static> {
     let batch = RecordBatch::new_empty(schema.clone());
@@ -22,7 +22,7 @@ fn empty_reader(schema: SchemaRef) -> Box<dyn RecordBatchReader + Send + 'static
 }
 
 pub(crate) fn get_info(
-    _state: &ConnState,
+    state: &ConnState,
     codes: Option<HashSet<InfoCode>>,
 ) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
     use adbc_core::constants::*;
@@ -59,7 +59,9 @@ pub(crate) fn get_info(
     for code in requested {
         let value = match code {
             InfoCode::VendorName => Value::String("Oracle".to_string()),
-            InfoCode::VendorVersion => Value::String("Oracle Database".to_string()),
+            InfoCode::VendorVersion => {
+                Value::String(state.lock()?.version().map_err(from_oracle)?.to_string())
+            }
             InfoCode::VendorArrowVersion => Value::String(crate::ARROW_VERSION.to_string()),
             InfoCode::VendorSql => Value::Bool(true),
             InfoCode::VendorSubstrait => Value::Bool(false),
@@ -213,13 +215,18 @@ pub(crate) fn get_table_schema(
     let table = qualified_name(db_schema, table_name)?;
     let sql = format!("SELECT * FROM {table} WHERE 1 = 0");
     let conn = state.lock()?;
+    // fetch_lobs keeps CLOB/BLOB/NCLOB in the describe metadata instead of
+    // the LONG/LONG RAW types oracledb substitutes for value fetching, so the
+    // reported `oracle.type-name` is the column's declared type.
     let mut stmt = conn
         .statement(&sql)
         .map_err(from_oracle)?
+        .fetch_lobs()
         .build()
         .map_err(from_oracle)?;
     stmt.ensure_fully_parsed().map_err(from_oracle)?;
-    Ok((*schema_from_metadata(stmt.out_metadata())?).clone())
+    let options = state.defaults.type_options()?;
+    Ok((*schema_from_metadata(stmt.out_metadata(), &options)?).clone())
 }
 
 pub(crate) fn get_table_types() -> Result<Box<dyn RecordBatchReader + Send + 'static>> {

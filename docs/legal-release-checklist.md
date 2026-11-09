@@ -35,6 +35,14 @@ organization's legal and compliance teams before external distribution.
 - Provide tests that use a user-supplied Oracle service or a CI secret, not a bundled database.
 - Have legal review approve any Oracle product names, trademarks, and documentation language.
 
+## CI Database Boundary
+
+- CI pulls Oracle Database Free (`gvenzl/oracle-free`, pinned by digest) at
+  test time, runs it only on the ephemeral runner, and discards it afterwards.
+  The image is never pushed, cached as a release artifact, or redistributed.
+- Confirm that use of Oracle Database Free in CI complies with the Oracle Free
+  Use Terms and Conditions.
+
 ## Demo Artifact Boundary
 
 - `scripts/seed_orkidea_demo.sh` may connect to a user-provided local

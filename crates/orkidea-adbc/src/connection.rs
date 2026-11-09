@@ -227,7 +227,7 @@ impl Connection for OracleConnection {
     type StatementType = OracleStatement;
 
     fn new_statement(&mut self) -> Result<Self::StatementType> {
-        Ok(OracleStatement::new(self.state.clone()))
+        OracleStatement::new(self.state.clone())
     }
 
     fn get_info(

@@ -15,13 +15,32 @@ DuckDB extension is produced under the DuckDB build directory as
 
 ## Tests
 
-Rust tests do not require Oracle when `ORKIDEA_ADBC_URI` is absent; the Oracle
-integration test is skipped in that case.
+Rust tests do not require Oracle when `ORKIDEA_ADBC_URI` is absent; the
+live integration tests (`oracle_smoke`, `fetch_live`) are skipped in that case.
 
 ```bash
 cargo test --workspace
 ORKIDEA_ADBC_URI='oracle://user:password@host:1521/service' \
-  cargo test -p orkidea-adbc --test oracle_smoke -- --nocapture
+  cargo test --workspace
+```
+
+`fetch_live` creates and drops tables named `ORKIDEA_T_*` and needs
+Oracle Database 23ai or later (BOOLEAN, JSON, and VECTOR columns). It covers
+streaming, every supported type mapping, historical dates checked against
+Oracle's own date arithmetic, parameterized queries, and schema consistency.
+
+CI runs the full suite against Oracle Database Free in a container that is
+started with a random, masked password. To reproduce it locally:
+
+```bash
+password="$(openssl rand -hex 16)"
+docker run -d --rm --name orkidea-oracle -p 127.0.0.1:1521:1521 \
+  -e ORACLE_PASSWORD="$password" \
+  -e APP_USER=orkidea_test -e APP_USER_PASSWORD="$password" \
+  gvenzl/oracle-free:23-slim-faststart
+# wait for "DATABASE IS READY TO USE!" in `docker logs orkidea-oracle`
+ORKIDEA_ADBC_URI="oracle://orkidea_test:$password@127.0.0.1:1521/FREEPDB1" \
+  cargo test --workspace
 ```
 
 The DuckDB integration test expects a user-supplied Oracle URI and a built

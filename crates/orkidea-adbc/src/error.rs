@@ -29,7 +29,13 @@ pub(crate) fn error(message: impl Into<String>, status: Status) -> AdbcError {
 /// password because `oracledb` stores passwords in a secret wrapper and does
 /// not include credentials in its error messages.
 pub(crate) fn from_oracle(err: OracleError) -> AdbcError {
-    let message = err.to_string();
+    let mut message = err.to_string();
+    if let ErrorKind::UnsupportedDbType(db_type) = err.kind() {
+        message = format!(
+            "{message}; {}",
+            crate::types::unsupported_type_hint(db_type)
+        );
+    }
     let (status, vendor_code) = match err.kind() {
         ErrorKind::DbError(db) => {
             let code = db.code();
@@ -63,7 +69,6 @@ pub(crate) fn from_oracle(err: OracleError) -> AdbcError {
         }
         ErrorKind::UnsupportedArrowType(_)
         | ErrorKind::UnsupportedConversion(_, _)
-        | ErrorKind::UnsupportedDbType(_)
         | ErrorKind::CannotConvertToArrowDecimal128(_, _, _)
         | ErrorKind::WrongArrowSchemaLength(_, _)
         | ErrorKind::ValueWasNull
@@ -76,6 +81,7 @@ pub(crate) fn from_oracle(err: OracleError) -> AdbcError {
         | ErrorKind::InvalidColumnName(_)
         | ErrorKind::NameHasEmbeddedQuotes => (Status::InvalidArguments, 0),
         ErrorKind::NotImplemented(_)
+        | ErrorKind::UnsupportedDbType(_)
         | ErrorKind::OperationNotSupportedOnBfile
         | ErrorKind::OperationOnlySupportedOnBfile => (Status::NotImplemented, 0),
         ErrorKind::LockPoisoned => (Status::Internal, 0),
@@ -99,13 +105,21 @@ pub(crate) fn expect_string(value: &adbc_core::options::OptionValue, key: &str) 
     }
 }
 
+/// Reads an integer option. String values are parsed, because many ADBC
+/// clients (Python `set_options`, driver-manager profiles, DuckDB) pass every
+/// option as a string.
 pub(crate) fn expect_int(value: &adbc_core::options::OptionValue, key: &str) -> Result<i64> {
-    match value {
-        adbc_core::options::OptionValue::Int(v) => Ok(*v),
-        other => Err(error(
-            format!("option {key:?} expects an integer, got {other:?}"),
+    use adbc_core::options::OptionValue;
+    let invalid = || {
+        error(
+            format!("option {key:?} expects an integer, got {value:?}"),
             Status::InvalidArguments,
-        )),
+        )
+    };
+    match value {
+        OptionValue::Int(v) => Ok(*v),
+        OptionValue::String(s) => s.trim().parse::<i64>().map_err(|_| invalid()),
+        _ => Err(invalid()),
     }
 }
 
@@ -116,4 +130,27 @@ pub(crate) fn expect_bool(value: &adbc_core::options::OptionValue, key: &str) ->
             Status::InvalidArguments,
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adbc_core::options::OptionValue;
+
+    #[test]
+    fn integer_options_accept_strings() {
+        assert_eq!(expect_int(&OptionValue::Int(5), "k").unwrap(), 5);
+        assert_eq!(
+            expect_int(&OptionValue::String(" 1000 ".into()), "k").unwrap(),
+            1000
+        );
+        assert!(expect_int(&OptionValue::String("ten".into()), "k").is_err());
+        assert!(expect_int(&OptionValue::Double(1.0), "k").is_err());
+    }
+
+    #[test]
+    fn boolean_options_accept_adbc_strings() {
+        assert!(expect_bool(&OptionValue::String("true".into()), "k").unwrap());
+        assert!(!expect_bool(&OptionValue::String("false".into()), "k").unwrap());
+    }
 }

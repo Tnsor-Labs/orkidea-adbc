@@ -13,24 +13,27 @@
 //! Oracle ADBC driver that converts query results to Arrow record batches.
 //!
 //! This crate implements the ADBC abstract API ([`adbc_core`]) on top of
-//! Oracle's official pure-Rust [`oracledb`] driver. Query results are produced
-//! directly as Arrow [`arrow_array::RecordBatch`]es by `oracledb`'s native
-//! Arrow fetch path; no OCI, Instant Client, ODBC driver manager, or libarrow
-//! dependency is required.
+//! Oracle's official pure-Rust [`oracledb`] driver. Query results are streamed
+//! from Oracle cursors into Arrow [`arrow_array::RecordBatch`]es of a bounded
+//! size; no OCI, Instant Client, ODBC driver manager, or libarrow dependency is
+//! required.
 //!
 //! The companion crate `orkidea-adbc-ffi` exports this driver through the ADBC
 //! C ABI so it can be loaded by the ADBC driver manager from Python, C/C++,
 //! Go, R, and any other ADBC client.
 
-mod arrow_schema;
 mod config;
 mod connection;
+mod convert;
 mod database;
 mod driver;
 mod error;
 mod ingest;
 mod metadata;
+mod params;
+mod reader;
 mod statement;
+mod types;
 
 pub use connection::OracleConnection;
 pub use database::OracleDatabase;
@@ -44,4 +47,25 @@ pub const DRIVER_NAME: &str = "orkidea";
 pub const DRIVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Arrow implementation version used by this build.
-pub const ARROW_VERSION: &str = "59.1.0";
+pub const ARROW_VERSION: &str = "59.3.2";
+
+pub use types::ORACLE_TYPE_NAME_KEY;
+
+#[cfg(test)]
+mod tests {
+    /// `ARROW_VERSION` is reported through `get_info`; keep it in step with
+    /// the lockfile.
+    #[test]
+    fn arrow_version_matches_lockfile() {
+        let lock = include_str!("../../../Cargo.lock");
+        let expected = format!(
+            "name = \"arrow-array\"\nversion = \"{}\"",
+            super::ARROW_VERSION
+        );
+        assert!(
+            lock.contains(&expected),
+            "ARROW_VERSION {} does not match arrow-array in Cargo.lock",
+            super::ARROW_VERSION
+        );
+    }
+}

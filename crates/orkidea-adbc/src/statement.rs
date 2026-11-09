@@ -16,16 +16,73 @@ use std::sync::Arc;
 use adbc_core::error::{Result, Status};
 use adbc_core::options::{IngestMode, OptionStatement, OptionValue};
 use adbc_core::{Optionable, PartitionedResult, Statement};
-use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{DataType, Field, Schema};
-use oracledb::BindParameters;
+use oracledb::{BindParameters, Cursor, ToDbValue};
 
-use crate::arrow_schema::schema_from_metadata;
+use crate::config::{
+    validate_number_scale, OPT_BATCH_SIZE, OPT_FETCH_ARRAY_SIZE, OPT_PREFETCH_ROWS,
+    OPT_UNCONSTRAINED_NUMBER, OPT_UNCONSTRAINED_NUMBER_SCALE,
+};
 use crate::connection::ConnState;
 use crate::error::{error, expect_bool, expect_int, expect_string, from_oracle};
 use crate::ingest;
+use crate::params::param_row;
+use crate::reader::{CursorSource, NoMoreCursors, OracleBatchReader};
+use crate::types::{plan_columns, schema_of, TypeOptions, UnconstrainedNumber};
 
 pub(crate) const DEFAULT_BATCH_SIZE: usize = 8192;
+
+/// Round-trip tuning applied to each Oracle cursor.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FetchTuning {
+    /// Rows fetched per round trip (`None`: oracledb default, 100).
+    pub(crate) fetch_array_size: Option<u32>,
+    /// Rows returned with the execute response (`None`: oracledb default, 2).
+    pub(crate) prefetch_rows: Option<u32>,
+}
+
+/// Opens a cursor for `sql`, applying the fetch tuning.
+pub(crate) fn open_cursor(
+    state: &ConnState,
+    sql: &str,
+    params: &[&dyn ToDbValue],
+    tuning: FetchTuning,
+) -> Result<Cursor> {
+    let conn = state.lock()?;
+    let mut builder = conn.statement(sql).map_err(from_oracle)?;
+    if let Some(n) = tuning.fetch_array_size {
+        builder = builder.fetch_array_size(n);
+    }
+    if let Some(n) = tuning.prefetch_rows {
+        builder = builder.prefetch_rows(n);
+    }
+    builder
+        .build()
+        .map_err(from_oracle)?
+        .query(params)
+        .map_err(from_oracle)
+}
+
+/// Executes a query once per row of a bound parameter batch.
+struct ParamCursors {
+    state: Arc<ConnState>,
+    sql: String,
+    params: RecordBatch,
+    next_row: usize,
+    tuning: FetchTuning,
+}
+
+impl CursorSource for ParamCursors {
+    fn next_cursor(&mut self) -> Result<Option<Cursor>> {
+        if self.next_row >= self.params.num_rows() {
+            return Ok(None);
+        }
+        let row = param_row(&self.params, self.next_row)?;
+        self.next_row += 1;
+        open_cursor(&self.state, &self.sql, &row.as_refs(), self.tuning).map(Some)
+    }
+}
 
 /// An ADBC statement bound to one Oracle session.
 pub struct OracleStatement {
@@ -40,37 +97,33 @@ pub struct OracleStatement {
     pub(crate) target_schema: Option<String>,
     pub(crate) temporary: bool,
     pub(crate) batch_size: usize,
-    pub(crate) fetch_array_size: u32,
-    pub(crate) prefetch_rows: u32,
+    pub(crate) tuning: FetchTuning,
+    pub(crate) type_options: TypeOptions,
+}
+
+fn positive_u32(defaults: &crate::config::DbOptions, key: &str, allow_zero: bool) -> Option<u32> {
+    defaults
+        .get_i64(key)
+        .ok()
+        .flatten()
+        .filter(|v| if allow_zero { *v >= 0 } else { *v > 0 })
+        .and_then(|v| u32::try_from(v).ok())
 }
 
 impl OracleStatement {
-    pub(crate) fn new(state: Arc<ConnState>) -> Self {
-        let batch_size = state
-            .defaults
-            .get_i64("oracle.batch_size")
-            .ok()
-            .flatten()
+    pub(crate) fn new(state: Arc<ConnState>) -> Result<Self> {
+        let defaults = &state.defaults;
+        let batch_size = defaults
+            .get_i64(OPT_BATCH_SIZE)?
             .filter(|v| *v > 0)
             .map(|v| v as usize)
             .unwrap_or(DEFAULT_BATCH_SIZE);
-        let fetch_array_size = state
-            .defaults
-            .get_i64("oracle.fetch_array_size")
-            .ok()
-            .flatten()
-            .filter(|v| *v > 0)
-            .map(|v| v as u32)
-            .unwrap_or(0);
-        let prefetch_rows = state
-            .defaults
-            .get_i64("oracle.prefetch_rows")
-            .ok()
-            .flatten()
-            .filter(|v| *v >= 0)
-            .map(|v| v as u32)
-            .unwrap_or(0);
-        Self {
+        let tuning = FetchTuning {
+            fetch_array_size: positive_u32(defaults, OPT_FETCH_ARRAY_SIZE, false),
+            prefetch_rows: positive_u32(defaults, OPT_PREFETCH_ROWS, true),
+        };
+        let type_options = defaults.type_options()?;
+        Ok(Self {
             state,
             sql: None,
             batch: None,
@@ -82,9 +135,9 @@ impl OracleStatement {
             target_schema: None,
             temporary: false,
             batch_size,
-            fetch_array_size,
-            prefetch_rows,
-        }
+            tuning,
+            type_options,
+        })
     }
 
     fn sql(&self) -> Result<String> {
@@ -106,46 +159,94 @@ impl OracleStatement {
         Ok(())
     }
 
-    fn batch_slices(&self, batch: &RecordBatch) -> Vec<RecordBatch> {
-        let rows = batch.num_rows();
-        if rows == 0 {
-            return Vec::new();
+    /// Classifies the statement (query, DML, ...) with oracledb's client-side
+    /// SQL parser. No round trip to the server.
+    fn is_query(&self, sql: &str) -> Result<bool> {
+        let conn = self.state.lock()?;
+        let stmt = conn
+            .statement(sql)
+            .map_err(from_oracle)?
+            .build()
+            .map_err(from_oracle)?;
+        Ok(stmt.is_query())
+    }
+
+    /// Parses and describes the statement on the server without executing it.
+    fn describe(&self, sql: &str) -> Result<oracledb::Statement> {
+        let conn = self.state.lock()?;
+        let mut stmt = conn
+            .statement(sql)
+            .map_err(from_oracle)?
+            .build()
+            .map_err(from_oracle)?;
+        if stmt.is_query() {
+            stmt.ensure_fully_parsed().map_err(from_oracle)?;
         }
-        let size = self.batch_size.max(1);
-        let mut out = Vec::with_capacity(rows.div_ceil(size));
-        let mut offset = 0;
-        while offset < rows {
-            let len = size.min(rows - offset);
-            out.push(batch.slice(offset, len));
-            offset += len;
-        }
-        out
+        Ok(stmt)
     }
 
     fn execute_query(&mut self) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
         let sql = self.sql()?;
-        let conn = self.state.lock()?;
-        let batch = match &self.batch {
-            Some(batch) => conn
-                .query_arrow(&sql, BindParameters::Arrow(batch.clone()))
-                .map_err(from_oracle)?,
-            None => conn
-                .query_arrow(&sql, &[&[] as &[&dyn oracledb::ToDbValue]][..])
-                .map_err(from_oracle)?,
-        };
-        drop(conn);
+        if !self.is_query(&sql)? {
+            // ADBC allows execute() on any statement; non-queries yield an
+            // empty result with an empty schema.
+            self.execute_non_query(&sql)?;
+            let schema = Arc::new(Schema::empty());
+            return Ok(Box::new(OracleBatchReader::new(
+                schema,
+                Vec::new(),
+                None,
+                Box::new(NoMoreCursors),
+                self.batch_size,
+            )?));
+        }
 
-        let schema = batch.schema();
-        let chunks = self.batch_slices(&batch);
-        let chunks = if chunks.is_empty() {
-            vec![batch]
-        } else {
-            chunks
+        let (first, source): (Option<Cursor>, Box<dyn CursorSource>) = match &self.batch {
+            None => (
+                Some(open_cursor(&self.state, &sql, &[], self.tuning)?),
+                Box::new(NoMoreCursors),
+            ),
+            Some(params) => {
+                let mut source = ParamCursors {
+                    state: self.state.clone(),
+                    sql: sql.clone(),
+                    params: params.clone(),
+                    next_row: 0,
+                    tuning: self.tuning,
+                };
+                (source.next_cursor()?, Box::new(source))
+            }
         };
-        Ok(Box::new(RecordBatchIterator::new(
-            chunks.into_iter().map(Ok),
+        let plans = match &first {
+            Some(cursor) => plan_columns(cursor.columns(), &self.type_options)?,
+            // Zero parameter rows: nothing executes, but the schema is known.
+            None => plan_columns(self.describe(&sql)?.out_metadata(), &self.type_options)?,
+        };
+        let schema = schema_of(&plans);
+        Ok(Box::new(OracleBatchReader::new(
             schema,
-        )))
+            plans,
+            first,
+            source,
+            self.batch_size,
+        )?))
+    }
+
+    fn execute_non_query(&mut self, sql: &str) -> Result<i64> {
+        self.ensure_writable()?;
+        let conn = self.state.lock()?;
+        let affected = match &self.batch {
+            Some(batch) => conn
+                .execute_batch(sql, BindParameters::Arrow(batch.clone()))
+                .map_err(from_oracle)?
+                .rows_affected(),
+            None => conn
+                .execute(sql, &[] as &[&dyn ToDbValue])
+                .map_err(from_oracle)?
+                .rows_affected(),
+        };
+        self.state.commit_if_autocommit(&conn)?;
+        Ok(affected.min(i64::MAX as u64) as i64)
     }
 
     fn execute_ingest(&mut self) -> Result<i64> {
@@ -210,7 +311,7 @@ impl Optionable for OracleStatement {
                 self.temporary = expect_bool(&value, key)?;
                 Ok(())
             }
-            "oracle.batch_size" => {
+            OPT_BATCH_SIZE => {
                 let v = expect_int(&value, key)?;
                 if v <= 0 {
                     return Err(error(
@@ -221,26 +322,35 @@ impl Optionable for OracleStatement {
                 self.batch_size = v as usize;
                 Ok(())
             }
-            "oracle.fetch_array_size" => {
+            OPT_FETCH_ARRAY_SIZE => {
                 let v = expect_int(&value, key)?;
-                if v <= 0 {
-                    return Err(error(
-                        "oracle.fetch_array_size must be positive",
-                        Status::InvalidArguments,
-                    ));
-                }
-                self.fetch_array_size = v as u32;
+                self.tuning.fetch_array_size =
+                    Some(u32::try_from(v).ok().filter(|v| *v > 0).ok_or_else(|| {
+                        error(
+                            "oracle.fetch_array_size must be a positive 32-bit integer",
+                            Status::InvalidArguments,
+                        )
+                    })?);
                 Ok(())
             }
-            "oracle.prefetch_rows" => {
+            OPT_PREFETCH_ROWS => {
                 let v = expect_int(&value, key)?;
-                if v < 0 {
-                    return Err(error(
-                        "oracle.prefetch_rows must be non-negative",
+                self.tuning.prefetch_rows = Some(u32::try_from(v).map_err(|_| {
+                    error(
+                        "oracle.prefetch_rows must be a non-negative 32-bit integer",
                         Status::InvalidArguments,
-                    ));
-                }
-                self.prefetch_rows = v as u32;
+                    )
+                })?);
+                Ok(())
+            }
+            OPT_UNCONSTRAINED_NUMBER => {
+                self.type_options.unconstrained_number =
+                    expect_string(&value, key)?.parse::<UnconstrainedNumber>()?;
+                Ok(())
+            }
+            OPT_UNCONSTRAINED_NUMBER_SCALE => {
+                self.type_options.unconstrained_number_scale =
+                    validate_number_scale(expect_int(&value, key)?)?;
                 Ok(())
             }
             _ => Err(error(
@@ -261,6 +371,7 @@ impl Optionable for OracleStatement {
                 .target_table
                 .clone()
                 .ok_or_else(|| error("target table was not set", Status::NotFound)),
+            OPT_UNCONSTRAINED_NUMBER => Ok(self.type_options.unconstrained_number.as_str().into()),
             _ => Err(error(
                 format!("unknown Orkidea string option {key:?}"),
                 Status::NotFound,
@@ -278,9 +389,20 @@ impl Optionable for OracleStatement {
     fn get_option_int(&self, key: Self::Option) -> Result<i64> {
         let key = key.as_ref();
         match key {
-            "oracle.batch_size" => Ok(self.batch_size as i64),
-            "oracle.fetch_array_size" => Ok(self.fetch_array_size as i64),
-            "oracle.prefetch_rows" => Ok(self.prefetch_rows as i64),
+            OPT_BATCH_SIZE => Ok(self.batch_size as i64),
+            OPT_FETCH_ARRAY_SIZE => {
+                self.tuning.fetch_array_size.map(i64::from).ok_or_else(|| {
+                    error("oracle.fetch_array_size has not been set", Status::NotFound)
+                })
+            }
+            OPT_PREFETCH_ROWS => self
+                .tuning
+                .prefetch_rows
+                .map(i64::from)
+                .ok_or_else(|| error("oracle.prefetch_rows has not been set", Status::NotFound)),
+            OPT_UNCONSTRAINED_NUMBER_SCALE => {
+                Ok(i64::from(self.type_options.unconstrained_number_scale))
+            }
             _ => Err(error(
                 format!("unknown Orkidea integer option {key:?}"),
                 Status::NotFound,
@@ -332,21 +454,8 @@ impl Statement for OracleStatement {
         if self.ingest_mode.is_some() {
             return Ok(Some(self.execute_ingest()?));
         }
-        self.ensure_writable()?;
         let sql = self.sql()?;
-        let conn = self.state.lock()?;
-        let affected = match &self.batch {
-            Some(batch) => conn
-                .execute_batch(&sql, BindParameters::Arrow(batch.clone()))
-                .map_err(from_oracle)?
-                .rows_affected(),
-            None => conn
-                .execute(&sql, &[] as &[&dyn oracledb::ToDbValue])
-                .map_err(from_oracle)?
-                .rows_affected(),
-        };
-        self.state.commit_if_autocommit(&conn)?;
-        Ok(Some(affected.min(i64::MAX as u64) as i64))
+        self.execute_non_query(&sql).map(Some)
     }
 
     fn execute_schema(&mut self) -> Result<Schema> {
@@ -357,15 +466,12 @@ impl Statement for OracleStatement {
             ));
         }
         let sql = self.sql()?;
-        let conn = self.state.lock()?;
-        let mut stmt = conn
-            .statement(&sql)
-            .map_err(from_oracle)?
-            .build()
-            .map_err(from_oracle)?;
-        stmt.ensure_fully_parsed().map_err(from_oracle)?;
-        let schema = schema_from_metadata(stmt.out_metadata())?;
-        Ok((*schema).clone())
+        let stmt = self.describe(&sql)?;
+        if !stmt.is_query() {
+            return Ok(Schema::empty());
+        }
+        let plans = plan_columns(stmt.out_metadata(), &self.type_options)?;
+        Ok((*schema_of(&plans)).clone())
     }
 
     fn execute_partitions(&mut self) -> Result<PartitionedResult> {

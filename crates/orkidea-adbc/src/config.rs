@@ -17,6 +17,19 @@ use adbc_core::error::Status;
 use adbc_core::options::OptionValue;
 
 use crate::error::{error, expect_int, expect_string, from_oracle, Result};
+use crate::types::{TypeOptions, UnconstrainedNumber};
+
+/// Validates `oracle.unconstrained_number_scale` (0..=38, the Decimal128 limit).
+pub(crate) fn validate_number_scale(scale: i64) -> Result<i8> {
+    if (0..=38).contains(&scale) {
+        Ok(scale as i8)
+    } else {
+        Err(error(
+            format!("{OPT_UNCONSTRAINED_NUMBER_SCALE} must be between 0 and 38, got {scale}"),
+            Status::InvalidArguments,
+        ))
+    }
+}
 
 pub(crate) const OPT_URI: &str = "uri";
 pub(crate) const OPT_USERNAME: &str = "username";
@@ -35,6 +48,8 @@ pub(crate) const OPT_CCLASS: &str = "oracle.cclass";
 pub(crate) const OPT_BATCH_SIZE: &str = "oracle.batch_size";
 pub(crate) const OPT_FETCH_ARRAY_SIZE: &str = "oracle.fetch_array_size";
 pub(crate) const OPT_PREFETCH_ROWS: &str = "oracle.prefetch_rows";
+pub(crate) const OPT_UNCONSTRAINED_NUMBER: &str = "oracle.unconstrained_number";
+pub(crate) const OPT_UNCONSTRAINED_NUMBER_SCALE: &str = "oracle.unconstrained_number_scale";
 
 const KNOWN_OPTIONS: &[&str] = &[
     OPT_URI,
@@ -54,6 +69,8 @@ const KNOWN_OPTIONS: &[&str] = &[
     OPT_BATCH_SIZE,
     OPT_FETCH_ARRAY_SIZE,
     OPT_PREFETCH_ROWS,
+    OPT_UNCONSTRAINED_NUMBER,
+    OPT_UNCONSTRAINED_NUMBER_SCALE,
 ];
 
 /// Database-level options as provided through the ADBC option API.
@@ -90,12 +107,30 @@ impl DbOptions {
                     ));
                 }
             }
+            OPT_UNCONSTRAINED_NUMBER => {
+                expect_string(&value, key)?.parse::<UnconstrainedNumber>()?;
+            }
+            OPT_UNCONSTRAINED_NUMBER_SCALE => {
+                validate_number_scale(expect_int(&value, key)?)?;
+            }
             _ => {
                 expect_string(&value, key)?;
             }
         }
         self.values.insert(key.to_string(), value);
         Ok(())
+    }
+
+    /// Type-planning options configured at the database level.
+    pub(crate) fn type_options(&self) -> Result<TypeOptions> {
+        let mut options = TypeOptions::default();
+        if let Some(mode) = self.get_string(OPT_UNCONSTRAINED_NUMBER)? {
+            options.unconstrained_number = mode.parse()?;
+        }
+        if let Some(scale) = self.get_i64(OPT_UNCONSTRAINED_NUMBER_SCALE)? {
+            options.unconstrained_number_scale = validate_number_scale(scale)?;
+        }
+        Ok(options)
     }
 
     pub(crate) fn get(&self, key: &str) -> Option<&OptionValue> {

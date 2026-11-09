@@ -32,16 +32,27 @@ covered by CI or release validation.
 
 ## Implemented ADBC Surface
 
-- `get_info` for vendor, driver, Arrow, SQL, Substrait, and ADBC version fields
-- `get_table_schema` for an individual Oracle table or view
+- Streaming query execution: results arrive as bounded Arrow record batches
+  (`oracle.batch_size`, default 8192 rows) instead of being loaded into memory
+- Exact type mapping for every common Oracle type, including `NUMBER` as
+  integers or decimals, `TIMESTAMP WITH TIME ZONE` as UTC instants, intervals,
+  `JSON`, `VECTOR`, and `BOOLEAN`. See [docs/type-support.md](docs/type-support.md)
+- Configurable handling of unconstrained `NUMBER` (`float64`, exact
+  `decimal`, or `string`)
+- Parameterized queries: a bound batch runs once per row
+- `get_info` for vendor (including the server version), driver, Arrow, SQL,
+  Substrait, and ADBC version fields
+- `get_table_schema` for an individual Oracle table or view, reporting the
+  declared Oracle type of each column
 - `get_table_types` for tables and views
 - `get_statistic_names` and `get_statistics` return valid empty result sets
 - `get_objects` returns the standard ADBC schema but does not yet enumerate
   Oracle catalogs, schemas, tables, columns, or constraints
-- Arrow query execution and schema discovery
+- Schema discovery with `execute_schema`, matching `execute` exactly
 - Ingestion modes `create`, `append`, `create_append`, and `replace`
 - Arrow batch ingestion with Oracle transaction/autocommit handling
-- Oracle call timeouts through `oracle.call_timeout_ms`
+- Oracle call timeouts through `oracle.call_timeout_ms`, plus fetch tuning
+  through `oracle.fetch_array_size` and `oracle.prefetch_rows`
 
 Partitioned execution, Substrait, Oracle procedures, scheduler jobs, and other
 server-management features are not implemented. Procedures and jobs are also

@@ -25,6 +25,41 @@ jobs:
       - run: cargo test --workspace --locked
       - run: cargo build --release --locked -p orkidea-adbc-ffi
 
+  oracle-integration:
+    name: oracle integration (Oracle Database Free 23ai)
+    runs-on: ubuntu-latest
+    env:
+      # Oracle Database Free, pulled at CI time and never redistributed.
+      # Pinned by digest; update deliberately.
+      ORACLE_IMAGE: gvenzl/oracle-free@sha256:f5ff19033860d662c821cb04eb10483fa94f14f78eae252d054291ea07028093
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Start Oracle Database Free
+        run: |
+          set -euo pipefail
+          password="$(openssl rand -hex 16)"
+          echo "::add-mask::${password}"
+          docker run -d --name oracle -p 127.0.0.1:1521:1521 \
+            -e ORACLE_PASSWORD="${password}" \
+            -e APP_USER=orkidea_test -e APP_USER_PASSWORD="${password}" \
+            "${ORACLE_IMAGE}"
+          echo "ORKIDEA_ADBC_URI=oracle://orkidea_test:${password}@127.0.0.1:1521/FREEPDB1" >> "${GITHUB_ENV}"
+      - name: Build tests while the database starts
+        run: cargo test --workspace --locked --no-run
+      - name: Wait for the database
+        run: |
+          for _ in $(seq 1 90); do
+            if docker logs oracle 2>&1 | grep -q 'DATABASE IS READY TO USE!'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          docker logs oracle 2>&1 | tail -50
+          exit 1
+      - name: Run tests against Oracle
+        run: cargo test --workspace --locked
+
   msrv:
     runs-on: ubuntu-latest
     steps:
