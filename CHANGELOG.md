@@ -13,6 +13,33 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Behaviour changes to read before upgrading
+
+- **Reads fetch a batch per round trip** -- @hc12r. Unless
+  `oracle.fetch_array_size` is set, each round trip now fetches
+  `oracle.batch_size` rows (at most 10000) instead of `oracledb`'s default of
+  100. Reading 2 million rows takes 5.1 s instead of 7.9 s. Each round
+  trip holds up to one batch of rows in memory; set
+  `oracle.fetch_array_size` to fetch less at a time. Reading the option
+  back returns the value in effect instead of `NOT_FOUND`.
+
+### Fixed
+
+- **Wide rows no longer corrupt the connection** -- @hc12r. Reading a row of
+  more than eight columns whose values partly repeat the previous row's could
+  fail with "unknown TTC message type", return an error naming the wrong
+  type, or panic, and left the connection unusable. It happened after
+  `prepare()` (which every DB-API `execute` calls), on a statement cache hit,
+  and in about one table in four of a random sample. The cause was in
+  `oracledb`, which sized the row's bit vector from the wrong column count.
+  A seeded test of 30 random wide tables now runs in CI.
+
+### Documentation
+
+- **Empty LOBs read as NULL** -- @hc12r. LOBs are fetched inline, which
+  cannot tell `EMPTY_CLOB()` from NULL. See
+  [docs/type-support.md](docs/type-support.md#empty-lobs).
+
 ## [0.1.0] - 2026-11-09
 
 The first release of Orkidea, an ADBC driver for Oracle Database written in

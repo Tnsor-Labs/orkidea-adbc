@@ -22,9 +22,9 @@ schema that `execute` produces.
 | `BINARY_FLOAT` / `BINARY_DOUBLE` | `Float32` / `Float64` | |
 | `BOOLEAN` (23ai) | `Boolean` | |
 | `VARCHAR2`, `NVARCHAR2`, `CHAR`, `NCHAR` | `Utf8` | `CHAR` keeps Oracle's blank padding |
-| `CLOB`, `NCLOB`, `LONG` | `LargeUtf8` | |
+| `CLOB`, `NCLOB`, `LONG` | `LargeUtf8` | An empty LOB reads as NULL; see below |
 | `RAW` | `Binary` | |
-| `BLOB`, `LONG RAW` | `LargeBinary` | |
+| `BLOB`, `LONG RAW` | `LargeBinary` | An empty LOB reads as NULL; see below |
 | `ROWID`, `UROWID` | `Utf8` | Oracle's text form |
 | `DATE` | `Timestamp(s)` | Oracle `DATE` has a time-of-day component |
 | `TIMESTAMP(f)` | `Timestamp(unit)` | f = 0 → s, 1–3 → ms, 4–6 → µs, 7–9 → ns |
@@ -72,6 +72,15 @@ expressions (`COUNT(*)`, `SUM(x)`, `1 + 1`) carry no precision metadata.
 The option can be set on the database (the default for all statements) or per
 statement. Casting in SQL, such as `CAST(x AS NUMBER(20,4))`, gives exact
 control per column.
+
+### Empty LOBs
+
+LOB values are fetched inline, with the row, which is much faster than
+fetching a LOB locator and reading each value separately. An inline value
+cannot tell an empty LOB (`EMPTY_CLOB()`, `EMPTY_BLOB()`) from NULL, so an
+empty LOB reads as NULL, as with python-oracledb's default. To tell them
+apart, select `DBMS_LOB.GETLENGTH(col)` alongside the column: it is `0` for
+an empty LOB and NULL for a NULL one.
 
 ### Not supported yet
 
@@ -178,7 +187,7 @@ them first.
 | Option | Default | Effect |
 | --- | --- | --- |
 | `oracle.batch_size` | 8192 | Maximum rows per Arrow record batch |
-| `oracle.fetch_array_size` | 100 (oracledb) | Rows fetched per network round trip |
+| `oracle.fetch_array_size` | `oracle.batch_size`, at most 10000 | Rows fetched per network round trip |
 | `oracle.prefetch_rows` | 2 (oracledb) | Rows returned with the execute response |
 
 All three can be set on the database or per statement. Integer options may

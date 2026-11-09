@@ -40,6 +40,12 @@ global and private temporary tables, streaming `bind_stream`, time-zone
 handling, and Oracle name resolution. It creates and drops tables named
 `ORKIDEA_I_*`.
 
+`wide_rows_live` reads 30 random wide tables of mixed types, generated from a
+fixed seed, after a plain execute, a `prepare()`, and a statement cache hit,
+and checks that all three agree. It guards against row-compression parsing
+bugs, and creates and drops tables named `ORKIDEA_W_*`. It takes about a
+minute.
+
 `fetch_live` creates and drops tables named `ORKIDEA_T_*` and needs
 Oracle Database 23ai or later (BOOLEAN, JSON, and VECTOR columns). It covers
 streaming, every supported type mapping, historical dates checked against

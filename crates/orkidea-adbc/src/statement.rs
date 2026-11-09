@@ -43,10 +43,16 @@ pub(crate) const OPT_PARTITION_CONSISTENT: &str = "oracle.partition.consistent";
 /// (`false`). The ADBC Python DB-API sets it for dict parameters.
 pub(crate) const OPT_BIND_BY_NAME: &str = "adbc.statement.bind_by_name";
 
+/// Upper bound of the default fetch array size, which otherwise follows the
+/// batch size.
+pub(crate) const MAX_DEFAULT_FETCH_ARRAY_SIZE: usize = 10_000;
+
 /// Round-trip tuning applied to each Oracle cursor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FetchTuning {
-    /// Rows fetched per round trip (`None`: oracledb default, 100).
+    /// Rows fetched per round trip (`None`: oracledb default, 100). A
+    /// statement fills it in from its batch size when it is not set; see
+    /// [`OracleStatement::fetch_tuning`].
     pub(crate) fetch_array_size: Option<u32>,
     /// Rows returned with the execute response (`None`: oracledb default, 2).
     pub(crate) prefetch_rows: Option<u32>,
@@ -238,6 +244,18 @@ impl OracleStatement {
         })
     }
 
+    /// The fetch tuning for cursors this statement opens. Unless
+    /// `oracle.fetch_array_size` is set, each round trip fetches one batch
+    /// (at most [`MAX_DEFAULT_FETCH_ARRAY_SIZE`] rows) instead of oracledb's
+    /// default of 100 rows, which makes large reads several times slower.
+    pub(crate) fn fetch_tuning(&self) -> FetchTuning {
+        let default = self.batch_size.min(MAX_DEFAULT_FETCH_ARRAY_SIZE) as u32;
+        FetchTuning {
+            fetch_array_size: Some(self.tuning.fetch_array_size.unwrap_or(default)),
+            ..self.tuning
+        }
+    }
+
     fn clear_ingest(&mut self) {
         self.ingest_mode = None;
         self.target_table = None;
@@ -386,7 +404,7 @@ impl OracleStatement {
         let params = self.ordered_params(&sql)?;
         let (first, source): (Option<Cursor>, Box<dyn RowSource>) = match params {
             None => (
-                Some(open_cursor(&self.state, &sql, &[], self.tuning)?),
+                Some(open_cursor(&self.state, &sql, &[], self.fetch_tuning())?),
                 Box::new(NoMoreRows),
             ),
             Some(params) => {
@@ -395,7 +413,7 @@ impl OracleStatement {
                     sql: sql.clone(),
                     params,
                     next_row: 0,
-                    tuning: self.tuning,
+                    tuning: self.fetch_tuning(),
                 };
                 (source.next_cursor()?, Box::new(source))
             }
@@ -754,11 +772,11 @@ impl Optionable for OracleStatement {
         let key = key.as_ref();
         match key {
             OPT_BATCH_SIZE => Ok(self.batch_size as i64),
-            OPT_FETCH_ARRAY_SIZE => {
-                self.tuning.fetch_array_size.map(i64::from).ok_or_else(|| {
-                    error("oracle.fetch_array_size has not been set", Status::NotFound)
-                })
-            }
+            OPT_FETCH_ARRAY_SIZE => Ok(self
+                .fetch_tuning()
+                .fetch_array_size
+                .map(i64::from)
+                .unwrap_or_default()),
             OPT_PREFETCH_ROWS => self
                 .tuning
                 .prefetch_rows
@@ -902,7 +920,7 @@ impl Statement for OracleStatement {
                     scn,
                     type_options: self.type_options,
                     batch_size: u32::try_from(self.batch_size).unwrap_or(u32::MAX),
-                    tuning: self.tuning,
+                    tuning: self.fetch_tuning(),
                 }
                 .encode()
             })
