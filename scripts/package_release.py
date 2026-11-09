@@ -120,7 +120,9 @@ def copy_third_party_licenses(target: str, destination: Path) -> None:
             crate_dir = destination / name
             crate_dir.mkdir()
             for f in files:
-                shutil.copy2(f, crate_dir / f.name)
+                # Plain copy: crates.io sources carry 1970 timestamps, which
+                # ZIP archives cannot store.
+                shutil.copy(f, crate_dir / f.name)
         else:
             missing.append(name)
         index.append(f"{name}: {package.get('license') or 'see crate'}")
@@ -157,7 +159,10 @@ Documentation: https://github.com/Tnsor-Labs/orkidea-adbc
 
 def make_archive(source_dir: Path, archive: Path) -> None:
     if archive.suffix == ".zip":
-        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        # strict_timestamps=False clamps any pre-1980 timestamp to 1980.
+        with zipfile.ZipFile(
+            archive, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False
+        ) as z:
             for path in sorted(source_dir.rglob("*")):
                 z.write(path, path.relative_to(source_dir.parent))
     else:
