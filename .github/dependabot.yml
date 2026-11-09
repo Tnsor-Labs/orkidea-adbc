@@ -15,6 +15,20 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # The arrow crates must share one version (oracledb's included), and
+      # so must the ADBC crates: bump each family together, majors included.
+      arrow:
+        patterns: ['arrow-*', 'arrow']
+      adbc:
+        patterns: ['adbc_*']
       cargo:
         patterns: ['*']
+        exclude-patterns: ['arrow-*', 'arrow', 'adbc_*', 'oracledb']
         update-types: [minor, patch]
+    ignore:
+      # oracledb is pinned to an exact beta; upgrade it deliberately.
+      - dependency-name: oracledb
+      # oracledb is built against one arrow major version; ours must match
+      # it, so arrow majors move only together with an oracledb upgrade.
+      - dependency-name: 'arrow-*'
+        update-types: ['version-update:semver-major']
