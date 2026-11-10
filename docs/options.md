@@ -59,9 +59,9 @@ sent with the next round trip, and `get_option` returns the current value.
 
 Columnar fetching takes the columns of the common types: numbers, text,
 `RAW`, `BOOLEAN`, `BINARY_FLOAT` and `BINARY_DOUBLE`, `DATE` and timestamps,
-intervals, `ROWID` and `UROWID`, and LOBs (which are fetched inline). A query
-with any other column, such as `JSON`, `VECTOR`, or an object, is read row by
-row.
+intervals, `ROWID` and `UROWID`, `JSON`, `VECTOR`, and LOBs (which are fetched
+inline). A query with an object, a collection, or a `REF CURSOR` column is
+read row by row.
 Both give the same batches. Reading a wide table is two to three times as
 fast this way, and takes a third of the CPU.
 

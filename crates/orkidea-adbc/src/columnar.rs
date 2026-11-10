@@ -17,8 +17,8 @@
 //! [`RowSink`] as the bytes it arrived as. [`Columns`] decodes them into one
 //! buffer per column, which become Arrow arrays. It takes the columns of the
 //! common types (numbers, text, raw, booleans, binary floats, dates,
-//! timestamps, intervals, and ROWIDs); a query with any other column is read
-//! as rows.
+//! timestamps, intervals, ROWIDs, JSON, and vectors); a query with any other
+//! column (an object, a collection, a REF CURSOR) is read as rows.
 //!
 //! Rows the cursor already holds (those that came with the execute) are
 //! appended from [`Row`]s, with the conversions of the row reader, so a
@@ -35,13 +35,14 @@ use arrow_array::{
 use arrow_buffer::{i256, BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, TimeUnit};
 use oracledb::{
-    Cursor, Metadata, OracleIntervalDS, OracleIntervalYM, OracleNumber, OracleTimestamp, Row,
-    RowSink, WireValue,
+    Cursor, JsonValue, Metadata, OracleIntervalDS, OracleIntervalYM, OracleNumber, OracleTimestamp,
+    Row, RowSink, Vector, WireValue,
 };
 
 use crate::convert;
 use crate::error::{error, from_oracle, Result};
-use crate::types::{ColumnPlan, Reader};
+use crate::reader::VectorBuilder;
+use crate::types::{ColumnPlan, Reader, VectorKind};
 
 /// What a column's values become.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,6 +65,10 @@ enum Kind {
     Timestamp(TimeUnit),
     /// `ROWID` or `UROWID`, as its text.
     RowId,
+    /// `JSON`, as its text.
+    Json,
+    /// `VECTOR`, as a list of its elements.
+    Vector(VectorKind),
     /// `INTERVAL DAY TO SECOND`, as a duration.
     Duration(TimeUnit),
     /// `INTERVAL YEAR TO MONTH`, in months.
@@ -102,6 +107,8 @@ fn kind(reader: &Reader, db_type: &oracledb::DbType) -> Option<Kind> {
         Reader::LargeBinary if raw => Kind::LargeBinary,
         Reader::Timestamp(unit) if datetime => Kind::Timestamp(*unit),
         Reader::RowId if db_type == DB_TYPE_ROWID || db_type == DB_TYPE_UROWID => Kind::RowId,
+        Reader::Json if db_type == DB_TYPE_JSON => Kind::Json,
+        Reader::Vector(kind) if db_type == DB_TYPE_VECTOR => Kind::Vector(*kind),
         Reader::IntervalDayToSecond(unit) if db_type == DB_TYPE_INTERVAL_DS => {
             Kind::Duration(*unit)
         }
@@ -173,6 +180,8 @@ enum Values {
         data: Vec<u8>,
         ends: Vec<usize>,
     },
+    /// Vectors, kept until the batch is built from them.
+    Vectors(Vec<Option<Vector>>),
 }
 
 impl Values {
@@ -190,10 +199,12 @@ impl Values {
             Kind::Decimal128(..) => Self::I128(Vec::with_capacity(capacity)),
             Kind::Decimal256(..) => Self::I256(Vec::with_capacity(capacity)),
             Kind::Boolean => Self::Bool(Vec::with_capacity(capacity)),
+            Kind::Vector(_) => Self::Vectors(Vec::with_capacity(capacity)),
             Kind::NumberText
             | Kind::Utf8
             | Kind::LargeUtf8
             | Kind::RowId
+            | Kind::Json
             | Kind::Binary
             | Kind::LargeBinary => Self::Bytes {
                 data: Vec::new(),
@@ -210,6 +221,7 @@ impl Values {
             Self::I128(v) => v.push(0),
             Self::I256(v) => v.push(i256::ZERO),
             Self::Bool(v) => v.push(false),
+            Self::Vectors(v) => v.push(None),
             Self::Bytes { data, ends } => ends.push(data.len()),
         }
     }
@@ -230,6 +242,7 @@ impl Values {
             Self::I128(v) => v.push(*v.last().unwrap_or(&0)),
             Self::I256(v) => v.push(*v.last().unwrap_or(&i256::ZERO)),
             Self::Bool(v) => v.push(*v.last().unwrap_or(&false)),
+            Self::Vectors(v) => v.push(v.last().cloned().flatten()),
             Self::Bytes { data, ends } => {
                 let end = ends.last().copied().unwrap_or(0);
                 let start = ends.len().checked_sub(2).map_or(0, |i| ends[i]);
@@ -247,6 +260,7 @@ impl Values {
             Self::I128(v) => v.truncate(rows),
             Self::I256(v) => v.truncate(rows),
             Self::Bool(v) => v.truncate(rows),
+            Self::Vectors(v) => v.truncate(rows),
             Self::Bytes { data, ends } => {
                 ends.truncate(rows);
                 data.truncate(ends.last().copied().unwrap_or(0));
@@ -267,6 +281,7 @@ impl Values {
             Self::I128(v) => Self::I128(split(v, rows)),
             Self::I256(v) => Self::I256(split(v, rows)),
             Self::Bool(v) => Self::Bool(split(v, rows)),
+            Self::Vectors(v) => Self::Vectors(split(v, rows)),
             Self::Bytes { data, ends } => {
                 let cut = if rows == 0 { 0 } else { ends[rows - 1] };
                 let front_ends = split(ends, rows);
@@ -405,6 +420,13 @@ impl Column {
                     .map_err(|e| with_column(e, &self.name))?
                     .into(),
             ),
+            (values @ Values::Bytes { .. }, Kind::Json, WireValue::Json(bytes)) => {
+                let value = WireValue::json(bytes).map_err(from_oracle)?;
+                values.push_bytes(convert::json_to_string(&value).as_bytes())
+            }
+            (Values::Vectors(v), Kind::Vector(_), WireValue::Vector(bytes)) => {
+                v.push(Some(WireValue::vector(bytes).map_err(from_oracle)?))
+            }
             (values @ Values::Bytes { .. }, Kind::RowId, WireValue::Rowid(text)) => {
                 values.push_bytes(text.as_bytes())
             }
@@ -496,6 +518,19 @@ impl Column {
                     .map_err(|e| with_column(e, &self.name))?;
                 push_option(v, value.map(i64::from))
             }
+            (values @ Values::Bytes { .. }, Kind::Json) => push_bytes_option(
+                values,
+                get!(JsonValue)
+                    .map(|v| convert::json_to_string(&v))
+                    .as_deref()
+                    .map(str::as_bytes),
+            ),
+            (Values::Vectors(v), Kind::Vector(_)) => {
+                let value = get!(Vector);
+                let valid = value.is_some();
+                v.push(value);
+                valid
+            }
             (values @ Values::Bytes { .. }, Kind::RowId) => {
                 push_bytes_option(values, get!(String).as_deref().map(str::as_bytes))
             }
@@ -573,10 +608,18 @@ impl Column {
                     .map_err(internal)?,
             ),
             (Values::Bool(v), _) => Arc::new(BooleanArray::new(BooleanBuffer::from(v), nulls)),
+            (Values::Vectors(v), Kind::Vector(kind)) => {
+                // The row reader's builder, so vectors come out as it makes them.
+                let mut builder = VectorBuilder::new(kind);
+                for value in v {
+                    builder.append(value, &self.name)?;
+                }
+                builder.finish()?
+            }
             (Values::Bytes { data, ends }, kind) => {
                 let data = Buffer::from_vec(data);
                 match kind {
-                    Kind::NumberText | Kind::Utf8 | Kind::RowId => {
+                    Kind::NumberText | Kind::Utf8 | Kind::RowId | Kind::Json => {
                         Arc::new(StringArray::try_new(offsets(&ends)?, data, nulls).map_err(
                             |e| error(format!("column {:?}: {e}", self.name), Status::InvalidData),
                         )?)

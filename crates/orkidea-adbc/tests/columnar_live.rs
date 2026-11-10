@@ -220,3 +220,20 @@ fn rowids_of_heap_and_index_organized_tables() {
         drop_table(&mut conn, table);
     }
 }
+
+#[test]
+fn json_and_vectors() {
+    read_both_ways(
+        "SELECT CAST(level AS NUMBER(9)) AS id,
+                CASE WHEN MOD(level, 5) = 0 THEN NULL
+                     ELSE JSON('{\"n\":' || level || ',\"tags\":[\"a\",\"b\"],\"x\":1.5,\"nested\":{\"ok\":true}}')
+                END AS doc,
+                CASE WHEN MOD(level, 7) = 0 THEN NULL
+                     ELSE TO_VECTOR('[' || level || ',2.5,-1]', 3, FLOAT32) END AS v32,
+                TO_VECTOR('[' || level || ',1]', 2, FLOAT64) AS v64,
+                TO_VECTOR('[' || MOD(level, 100) || ',-3,7,0]', 4, INT8) AS v8,
+                TO_VECTOR('[' || level || ',' || (level + 1) || ']', *, FLOAT64) AS flexible
+         FROM dual CONNECT BY level <= 2500 ORDER BY id",
+        &[("oracle.batch_size", OptionValue::Int(1000))],
+    );
+}

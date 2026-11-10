@@ -42,7 +42,7 @@ use crate::error::{error, from_oracle, Result};
 use crate::types::{ColumnPlan, Reader, VectorElement, VectorKind};
 
 /// Accumulates values of one `VECTOR` column.
-struct VectorBuilder {
+pub(crate) struct VectorBuilder {
     kind: VectorKind,
     f32s: Vec<f32>,
     f64s: Vec<f64>,
@@ -53,7 +53,7 @@ struct VectorBuilder {
 }
 
 impl VectorBuilder {
-    fn new(kind: VectorKind) -> Self {
+    pub(crate) fn new(kind: VectorKind) -> Self {
         Self {
             kind,
             f32s: Vec::new(),
@@ -74,7 +74,7 @@ impl VectorBuilder {
         }
     }
 
-    fn append(&mut self, value: Option<Vector>, column: &str) -> Result<()> {
+    pub(crate) fn append(&mut self, value: Option<Vector>, column: &str) -> Result<()> {
         let before = self.len();
         match value {
             None => {
@@ -142,7 +142,7 @@ impl VectorBuilder {
         }
     }
 
-    fn finish(&mut self) -> Result<ArrayRef> {
+    pub(crate) fn finish(&mut self) -> Result<ArrayRef> {
         let values: ArrayRef = match self.kind.element {
             VectorElement::Float32 => Arc::new(arrow_array::Float32Array::from(std::mem::take(
                 &mut self.f32s,
