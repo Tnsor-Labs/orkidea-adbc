@@ -232,7 +232,11 @@ fn json_and_vectors() {
                      ELSE TO_VECTOR('[' || level || ',2.5,-1]', 3, FLOAT32) END AS v32,
                 TO_VECTOR('[' || level || ',1]', 2, FLOAT64) AS v64,
                 TO_VECTOR('[' || MOD(level, 100) || ',-3,7,0]', 4, INT8) AS v8,
-                TO_VECTOR('[' || level || ',' || (level + 1) || ']', *, FLOAT64) AS flexible
+                TO_VECTOR('[' || level || ',' || (level + 1) || ']', *, FLOAT64) AS flexible,
+                TO_VECTOR('[' || MOD(level, 256) || ',' || MOD(level * 7, 256) || ']', 16, BINARY)
+                    AS bits,
+                CASE WHEN MOD(level, 3) = 0 THEN NULL
+                     ELSE TO_NCLOB(N'nclob ä ' || level) END AS ncl
          FROM dual CONNECT BY level <= 2500 ORDER BY id",
         &[("oracle.batch_size", OptionValue::Int(1000))],
     );

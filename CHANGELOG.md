@@ -29,10 +29,10 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ### Queries and types
 
-- **Every column type but objects is decoded straight into Arrow columns**
-  -- @hc12r. `INTERVAL DAY TO SECOND`, `INTERVAL YEAR TO MONTH`, `ROWID`,
-  `UROWID`, `JSON`, and `VECTOR` columns no longer make a query read row by
-  row. Object, collection, and `REF CURSOR` columns still do.
+- **Every column type is decoded straight into Arrow columns** -- @hc12r.
+  `INTERVAL DAY TO SECOND`, `INTERVAL YEAR TO MONTH`, `ROWID`, `UROWID`,
+  `JSON`, `VECTOR`, and `NCLOB` columns no longer make a query read row by
+  row, so no type the driver reads does.
 
 ## [0.3.0] - 2026-11-10
 

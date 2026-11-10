@@ -15,10 +15,9 @@
 //!
 //! `oracledb`'s [`Cursor::fetch_into`] hands each value of a fetched row to a
 //! [`RowSink`] as the bytes it arrived as. [`Columns`] decodes them into one
-//! buffer per column, which become Arrow arrays. It takes the columns of the
-//! common types (numbers, text, raw, booleans, binary floats, dates,
-//! timestamps, intervals, ROWIDs, JSON, and vectors); a query with any other
-//! column (an object, a collection, a REF CURSOR) is read as rows.
+//! buffer per column, which become Arrow arrays. It takes every column type
+//! the driver reads; a cursor with another column (never planned, since such
+//! a query is refused) would be read as rows.
 //!
 //! Rows the cursor already holds (those that came with the execute) are
 //! appended from [`Row`]s, with the conversions of the row reader, so a
@@ -84,7 +83,9 @@ fn kind(reader: &Reader, db_type: &oracledb::DbType) -> Option<Kind> {
         || db_type == DB_TYPE_CHAR
         || db_type == DB_TYPE_NVARCHAR
         || db_type == DB_TYPE_NCHAR
-        || db_type == DB_TYPE_LONG;
+        // CLOB and NCLOB, fetched inline.
+        || db_type == DB_TYPE_LONG
+        || db_type == DB_TYPE_LONG_NVARCHAR;
     let raw = db_type == DB_TYPE_RAW || db_type == DB_TYPE_LONG_RAW;
     let datetime = db_type == DB_TYPE_DATE
         || db_type == DB_TYPE_TIMESTAMP

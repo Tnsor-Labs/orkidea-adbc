@@ -57,11 +57,11 @@ sent with the next round trip, and `get_option` returns the current value.
 | --- | --- |
 | `oracle.columnar_fetch` | `true` (default) decodes query results from the network buffer straight into Arrow columns. `false` builds each row first, as before 0.3.0; set it to rule this out if you suspect a problem in it. |
 
-Columnar fetching takes the columns of the common types: numbers, text,
+Every column type the driver reads is fetched this way: numbers, text,
 `RAW`, `BOOLEAN`, `BINARY_FLOAT` and `BINARY_DOUBLE`, `DATE` and timestamps,
 intervals, `ROWID` and `UROWID`, `JSON`, `VECTOR`, and LOBs (which are fetched
-inline). A query with an object, a collection, or a `REF CURSOR` column is
-read row by row.
+inline). Rows returned by PL/SQL (OUT parameters, `DML RETURNING`) go into the
+same columns as they are.
 Both give the same batches. Reading a wide table is two to three times as
 fast this way, and takes a third of the CPU.
 
