@@ -146,7 +146,11 @@ With `adbc.ingest.temporary = true`:
 
 Table and column names follow Oracle's name resolution. A name that is valid
 unquoted (`customers`, `order_id`) is upper-cased, so it can be queried without
-quotes. Any other name (`Total Amount`) is kept exactly. `append` matches
+quotes. Any other name (`Total Amount`) is kept exactly. A name in double
+quotes (`"MyTable"`, `"Id"`) is taken exactly too, as in Oracle SQL: this is
+how to target a mixed-case table or column whose name would also be valid
+unquoted. The same applies to the schema, and to the table name given to
+`get_table_schema`. `append` matches
 columns by these names, in any order. Table columns missing from the batch
 receive their defaults. A batch column the table lacks, or a type that cannot
 be stored in the target column, fails with `ALREADY_EXISTS` before any row is

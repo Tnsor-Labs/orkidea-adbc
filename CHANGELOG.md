@@ -23,6 +23,15 @@ pushed (see [docs/release.md](docs/release.md)).
   `oracle.fetch_array_size` to fetch less at a time. Reading the option
   back returns the value in effect instead of `NOT_FOUND`.
 
+### Added
+
+- **Quoted names target exact objects** -- @hc12r. A table, schema, or column
+  name in double quotes (`"MyTable"`) is taken exactly by ingest and
+  `get_table_schema`, as in Oracle SQL. Before, a mixed-case name that was
+  also valid unquoted was upper-cased, so such a table could not be appended
+  to, and quoted names failed with "name has embedded quotes". A quoted name
+  is no longer split at a dot inside the quotes (`"a.b"`).
+
 ### Fixed
 
 - **Wide rows no longer corrupt the connection** -- @hc12r. Reading a row of
