@@ -444,3 +444,35 @@ fn table_types_include_oracle_object_kinds() {
         ["TABLE", "VIEW", "MATERIALIZED VIEW", "TEMPORARY TABLE"]
     );
 }
+
+#[test]
+fn a_recreated_table_is_described_afresh() {
+    use adbc_core::Statement;
+    let Some(mut conn) = connect() else { return };
+    let table = "ORKIDEA_C_RECREATED";
+    drop_table(&mut conn, table);
+    let describe = |conn: &mut OracleConnection| {
+        let mut stmt = conn.new_statement().unwrap();
+        stmt.set_sql_query(format!("SELECT * FROM {table}"))
+            .unwrap();
+        let schema = stmt.execute_schema().unwrap();
+        let table_schema = conn.get_table_schema(None, None, table).unwrap();
+        assert_eq!(schema.fields().len(), table_schema.fields().len());
+        schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>()
+    };
+    exec(&mut conn, &format!("CREATE TABLE {table} (a NUMBER)"));
+    assert_eq!(describe(&mut conn), ["A"]);
+    // The same SQL text again, after the table changed shape: the statement
+    // cache must not answer with the old columns.
+    drop_table(&mut conn, table);
+    exec(
+        &mut conn,
+        &format!("CREATE TABLE {table} (a NUMBER, b VARCHAR2(10))"),
+    );
+    assert_eq!(describe(&mut conn), ["A", "B"]);
+    drop_table(&mut conn, table);
+}

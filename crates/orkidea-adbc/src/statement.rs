@@ -370,11 +370,16 @@ impl OracleStatement {
     }
 
     /// Parses and describes the statement on the server without executing it.
+    /// Parses a statement on the server and returns it with its metadata.
+    /// It bypasses the statement cache: a cached statement counts as parsed
+    /// and keeps the columns it had then, so after the table is re-created
+    /// (DROP and CREATE, or ALTER) the same SQL would describe the old table.
     fn describe(&self, sql: &str) -> Result<oracledb::Statement> {
         let conn = self.state.lock()?;
         let mut stmt = conn
             .statement(sql)
             .map_err(from_oracle)?
+            .exclude_from_cache()
             .build()
             .map_err(from_oracle)?;
         if stmt.is_query() {

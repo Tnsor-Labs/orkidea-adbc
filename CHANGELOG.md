@@ -34,6 +34,12 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ### Fixed
 
+- **A re-created table is described as it is now** -- @hc12r.
+  `execute_schema`, `prepare`, and `get_table_schema` reused the column
+  metadata of a cached statement with the same SQL, so after a table was
+  dropped and created again, or altered, they described its old columns.
+  Describing now bypasses the statement cache; executing a query was not
+  affected, because Oracle re-parses an invalidated cursor.
 - **Wide rows no longer corrupt the connection** -- @hc12r. Reading a row of
   more than eight columns whose values partly repeat the previous row's could
   fail with "unknown TTC message type", return an error naming the wrong

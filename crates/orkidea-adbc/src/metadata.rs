@@ -205,11 +205,14 @@ pub(crate) fn get_table_schema(
     let conn = state.lock()?;
     // fetch_lobs keeps CLOB/BLOB/NCLOB in the describe metadata instead of
     // the LONG/LONG RAW types oracledb substitutes for value fetching, so the
-    // reported `oracle.type-name` is the column's declared type.
+    // reported `oracle.type-name` is the column's declared type. The statement
+    // cache is bypassed, as in OracleStatement::describe, so that a table
+    // re-created since is described as it is now.
     let mut stmt = conn
         .statement(&sql)
         .map_err(from_oracle)?
         .fetch_lobs()
+        .exclude_from_cache()
         .build()
         .map_err(from_oracle)?;
     stmt.ensure_fully_parsed().map_err(from_oracle)?;
