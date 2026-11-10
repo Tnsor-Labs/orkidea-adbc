@@ -13,6 +13,18 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-10
+
+Orkidea 0.2.1 fixes one bug: a second DB-API cursor running a query with
+parameters, after a first had read it to the end, failed with ORA-01008.
+Only clients that prepare statements are affected; the DuckDB extension
+does not. It was found by the DuckDB extension's lab, and is tested in Rust and Python
+against Oracle Database 23ai Free.
+
+### Behaviour changes to read before upgrading
+
+None.
+
 ### Fixed
 
 - **A second cursor can run the same query with parameters** -- @hc12r.
@@ -258,6 +270,7 @@ still change between minor releases; each change will be listed here.
 - pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
   a pyarrow built from source. The low-level API works without it.
 
-[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Tnsor-Labs/orkidea-adbc/releases/tag/v0.1.0

@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 adbc_core.workspace = true
 adbc_ffi.workspace = true
-oracle_adbc = { package = "orkidea-adbc", version = "0.2.0", path = "../orkidea-adbc" }
+oracle_adbc = { package = "orkidea-adbc", version = "0.2.1", path = "../orkidea-adbc" }
 
 [dev-dependencies]
 adbc_driver_manager.workspace = true

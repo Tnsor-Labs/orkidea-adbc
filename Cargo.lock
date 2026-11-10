@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "orkidea-adbc"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "adbc_core",
  "arrow-array",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "orkidea-adbc-ffi"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "adbc_core",
  "adbc_driver_manager",
