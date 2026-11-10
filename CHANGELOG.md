@@ -17,9 +17,9 @@ pushed (see [docs/release.md](docs/release.md)).
 
 Orkidea 0.2.1 fixes one bug: a second DB-API cursor running a query with
 parameters, after a first had read it to the end, failed with ORA-01008.
-Only clients that prepare statements are affected; the DuckDB extension
-does not. It was found by the DuckDB extension's lab, and is tested in Rust and Python
-against Oracle Database 23ai Free.
+Only clients that prepare statements are affected; the DuckDB extension is
+not. The lab of the DuckDB extension found it, and it is tested in Rust and
+Python against Oracle Database 23ai Free.
 
 ### Behaviour changes to read before upgrading
 
