@@ -23,8 +23,9 @@ Requires ``pyarrow`` (install ``adbc-driver-orkidea[dbapi]``)::
             table = cur.fetch_arrow_table()
 
 Placeholders use Oracle's ``:name`` syntax. A ``dict`` of parameters binds
-by name, and a sequence binds by position, in order of each placeholder's
-first appearance.
+by name, and a placeholder used more than once takes the same value each
+time. A sequence binds by position: in SQL, one value per placeholder in the
+order they appear; in PL/SQL, one value per name.
 """
 
 from __future__ import annotations

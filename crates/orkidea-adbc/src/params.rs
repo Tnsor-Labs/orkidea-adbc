@@ -440,7 +440,7 @@ pub(crate) enum BindMode {
 /// (case-insensitively, as Oracle resolves unquoted bind names), parameters
 /// bind by name: `:doubled := :n * 2` takes `n` and `doubled` from the
 /// fields of those names, whatever their order. Otherwise they bind by
-/// position, in order of first appearance, as ADBC specifies.
+/// position, one field per bind, as ADBC specifies.
 fn auto_order(bind_names: &[String], schema: &Schema) -> Option<Vec<usize>> {
     if bind_names.is_empty() || bind_names.len() != schema.fields().len() {
         return None;

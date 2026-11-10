@@ -35,9 +35,10 @@ with dbapi.connect(
 ```
 
 Placeholders use Oracle's `:name` syntax. A `dict` of parameters binds by
-name. A sequence binds by position, in order of each placeholder's first
-appearance. Like every DB-API connection, it starts a transaction:
-call `commit()`, or pass `autocommit=True`.
+name, and a placeholder used more than once takes the same value each time. A
+sequence binds by position: in SQL, one value per placeholder in the order
+they appear; in PL/SQL, one value per name. Like every DB-API connection, it
+starts a transaction: call `commit()`, or pass `autocommit=True`.
 
 Load an Arrow table, a pandas or polars DataFrame converted to Arrow, or a
 stream of record batches into a table:

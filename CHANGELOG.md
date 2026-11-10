@@ -13,6 +13,14 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Documentation
+
+- **Positional binding is described as it works** -- @hc12r. The Python
+  package's README and `dbapi` docstring said a sequence binds in order of
+  each placeholder's first appearance. In SQL it takes one value per
+  placeholder in the order they appear, so a repeated name takes a value for
+  each use; in PL/SQL, one value per name.
+
 ## [0.2.0] - 2026-11-10
 
 Orkidea 0.2.0 reads faster and fixes what the DuckDB extension built on it
