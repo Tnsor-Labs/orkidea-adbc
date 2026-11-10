@@ -127,7 +127,7 @@ the signature when `cosign` is installed.
 ```bash
 cargo build --locked --profile dist -p orkidea-adbc-ffi --target x86_64-unknown-linux-gnu
 python3 scripts/package_release.py --target x86_64-unknown-linux-gnu \
-  --platform linux_amd64 --version 0.1.0 --out dist
+  --platform linux_amd64 --version 0.2.0 --out dist
 ```
 
 A library built directly on a recent distribution needs that
@@ -138,9 +138,9 @@ build backend, `python/build_backend.py`, which needs only the standard
 library):
 
 ```bash
-tar -xzf dist/orkidea-adbc-0.1.0-linux_amd64.tar.gz -C dist
-ORKIDEA_ADBC_LIBRARY=$PWD/dist/orkidea-adbc-0.1.0-linux_amd64/lib/libadbc_driver_orkidea.so \
-ORKIDEA_ADBC_THIRD_PARTY_LICENSES=$PWD/dist/orkidea-adbc-0.1.0-linux_amd64/THIRD_PARTY_LICENSES \
+tar -xzf dist/orkidea-adbc-0.2.0-linux_amd64.tar.gz -C dist
+ORKIDEA_ADBC_LIBRARY=$PWD/dist/orkidea-adbc-0.2.0-linux_amd64/lib/libadbc_driver_orkidea.so \
+ORKIDEA_ADBC_THIRD_PARTY_LICENSES=$PWD/dist/orkidea-adbc-0.2.0-linux_amd64/THIRD_PARTY_LICENSES \
 ORKIDEA_ADBC_PLATFORM=linux_amd64 \
   python3 -m pip wheel --no-deps --wheel-dir dist ./python
 ```

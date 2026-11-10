@@ -138,7 +138,7 @@ manifest can list one library per platform:
 ```toml
 manifest_version = 1
 name = "orkidea"
-version = "0.1.0"
+version = "0.2.0"
 
 [Driver]
 entrypoint = "OrkideaDriverInit"

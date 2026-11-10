@@ -13,6 +13,20 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-10
+
+Orkidea 0.2.0 reads faster and fixes what the DuckDB extension built on it
+found: wide rows that could break a connection, schemas described from a
+stale cache, quoted names, `tnsnames.ora` aliases after a comment, and SQL
+that binds a placeholder more than once. Two of the fixes are in `oracledb`
+itself; until a release of it includes them, Orkidea builds with `oracledb`
+26.0.0-beta.5 plus those fixes, from
+[Tnsor-Labs/rust-oracledb](https://github.com/Tnsor-Labs/rust-oracledb),
+pinned by commit.
+
+It is tested as 0.1.0 was, against Oracle Database Free 23ai, with new live
+tests for each fix, including a seeded test of 30 random wide tables.
+
 ### Behaviour changes to read before upgrading
 
 - **Reads fetch a batch per round trip** -- @hc12r. Unless
@@ -23,23 +37,16 @@ pushed (see [docs/release.md](docs/release.md)).
   `oracle.fetch_array_size` to fetch less at a time. Reading the option
   back returns the value in effect instead of `NOT_FOUND`.
 
-### Added
-
-- **Quoted names target exact objects** -- @hc12r. A table, schema, or column
-  name in double quotes (`"MyTable"`) is taken exactly by ingest and
-  `get_table_schema`, as in Oracle SQL. Before, a mixed-case name that was
-  also valid unquoted was upper-cased, so such a table could not be appended
-  to, and quoted names failed with "name has embedded quotes". A quoted name
-  is no longer split at a dot inside the quotes (`"a.b"`).
-
-### Fixed
+### Queries and types
 
 - **A re-created table is described as it is now** -- @hc12r.
   `execute_schema`, `prepare`, and `get_table_schema` reused the column
   metadata of a cached statement with the same SQL, so after a table was
   dropped and created again, or altered, they described its old columns.
   Describing now bypasses the statement cache; executing a query was not
-  affected, because Oracle re-parses an invalidated cursor.
+  affected, because Oracle re-parses an invalidated cursor. Reported to
+  `oracledb` as
+  [oracle/rust-oracledb#84](https://github.com/oracle/rust-oracledb/issues/84).
 - **Wide rows no longer corrupt the connection** -- @hc12r. Reading a row of
   more than eight columns whose values partly repeat the previous row's could
   fail with "unknown TTC message type", return an error naming the wrong
@@ -47,17 +54,24 @@ pushed (see [docs/release.md](docs/release.md)).
   `prepare()` (which every DB-API `execute` calls), on a statement cache hit,
   and in about one table in four of a random sample. The cause was in
   `oracledb`, which sized the row's bit vector from the wrong column count
-  ([oracle/rust-oracledb#80](https://github.com/oracle/rust-oracledb/issues/80)).
-  Until a release includes the fix, Orkidea builds with `oracledb`
-  26.0.0-beta.5 plus this fix (and the next), from
-  [Tnsor-Labs/rust-oracledb](https://github.com/Tnsor-Labs/rust-oracledb),
-  pinned by commit. A seeded test of 30 random wide tables now runs in CI.
-- **`tnsnames.ora` aliases after a comment are found** -- @hc12r. An alias
-  written on the line after a `#` comment, as in most `tnsnames.ora` files,
-  failed with "unable to find" the alias: `oracledb`'s parser dropped the
-  first character of the line after a comment. The fork that Orkidea builds
-  with now includes the fix, and a live test connects through an alias
-  written that way.
+  ([oracle/rust-oracledb#80](https://github.com/oracle/rust-oracledb/issues/80),
+  fixed upstream). A seeded test of 30 random wide tables now runs in CI.
+- **Empty LOBs read as NULL** -- @hc12r. LOBs are fetched inline, which
+  cannot tell `EMPTY_CLOB()` from NULL. This is not new; it is now
+  documented in [docs/type-support.md](docs/type-support.md#empty-lobs).
+
+### Ingestion and catalog
+
+- **Quoted names target exact objects** -- @hc12r. A table, schema, or column
+  name in double quotes (`"MyTable"`) is taken exactly by ingest and
+  `get_table_schema`, as in Oracle SQL. Before, quoted names failed with
+  "name has embedded quotes", so a mixed-case table whose name would also be
+  valid unquoted could not be appended to. A quoted name is no longer split
+  at a dot inside the quotes (`"a.b"`). Unquoted names are upper-cased, as
+  before.
+
+### Parameters and PL/SQL
+
 - **A placeholder used twice in SQL binds by name** -- @hc12r. Bound by name
   (a DB-API `dict`, or `adbc.statement.bind_by_name`), SQL that used a
   placeholder more than once, as in `WHERE a = :v OR b = :v`, failed with
@@ -66,11 +80,18 @@ pushed (see [docs/release.md](docs/release.md)).
   now binds the field to every use, for queries, DML, and `RETURNING`.
   Binding by position, and PL/SQL, are unchanged.
 
-### Documentation
+### Connections
 
-- **Empty LOBs read as NULL** -- @hc12r. LOBs are fetched inline, which
-  cannot tell `EMPTY_CLOB()` from NULL. See
-  [docs/type-support.md](docs/type-support.md#empty-lobs).
+- **`tnsnames.ora` aliases after a comment are found** -- @hc12r. An alias
+  written on the line after a `#` comment, as in most `tnsnames.ora` files,
+  failed with "unable to find" the alias: `oracledb`'s parser dropped the
+  first character of the line after a comment
+  ([oracle/rust-oracledb#83](https://github.com/oracle/rust-oracledb/issues/83)).
+  A live test connects through an alias written that way.
+
+### Known limitations
+
+Unchanged from 0.1.0.
 
 ## [0.1.0] - 2026-11-09
 
@@ -217,5 +238,6 @@ still change between minor releases; each change will be listed here.
 - pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
   a pyarrow built from source. The low-level API works without it.
 
-[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Tnsor-Labs/orkidea-adbc/releases/tag/v0.1.0
