@@ -85,10 +85,10 @@ fn quote(name: &str) -> String {
     format!("\"{name}\"")
 }
 
-use crate::metadata::normalize_identifier;
+use crate::metadata::{normalize_identifier, split_qualified};
 
 fn resolve_name(schema: Option<&str>, table: &str) -> Result<TableName> {
-    let (schema, table) = match (schema, table.rsplit_once('.')) {
+    let (schema, table) = match (schema, split_qualified(table)) {
         (Some(schema), _) => (Some(schema), table),
         (None, Some((schema, table))) => (Some(schema), table),
         (None, None) => (None, table),
@@ -309,7 +309,9 @@ fn ignore_missing<T>(result: std::result::Result<T, oracledb::Error>) -> Result<
 
 /// Describes an existing table, or `None` when it does not exist.
 fn existing_schema(state: &ConnState, name: &TableName) -> Result<Option<Schema>> {
-    match metadata::get_table_schema(state, None, name.schema.as_deref(), &name.table) {
+    // The names are already resolved; quoted, they are not resolved again.
+    let schema = name.schema.as_deref().map(quote);
+    match metadata::get_table_schema(state, None, schema.as_deref(), &quote(&name.table)) {
         Ok(schema) => Ok(Some(schema)),
         Err(err) if err.status == Status::NotFound => Ok(None),
         Err(err) => Err(err),
@@ -637,6 +639,21 @@ mod tests {
         assert!(normalize_identifier("  ", "t").is_err());
         let name = resolve_name(None, "hr.emp").unwrap();
         assert_eq!(name.sql(), "\"HR\".\"EMP\"");
+    }
+
+    #[test]
+    fn quoted_identifiers_are_taken_exactly() {
+        assert_eq!(normalize_identifier("\"MyTable\"", "t").unwrap(), "MyTable");
+        assert_eq!(normalize_identifier("\"ORDERS\"", "t").unwrap(), "ORDERS");
+        assert_eq!(normalize_identifier("\"lower\"", "t").unwrap(), "lower");
+        assert!(normalize_identifier("\"\"", "t").is_err());
+        assert!(normalize_identifier("\"a\"b\"", "t").is_err());
+        let name = resolve_name(Some("\"Hr\""), "\"MyTable\"").unwrap();
+        assert_eq!(name.sql(), "\"Hr\".\"MyTable\"");
+        let dotted = resolve_name(None, "\"a.b\"").unwrap();
+        assert_eq!(dotted.sql(), "\"a.b\"");
+        let qualified = resolve_name(None, "hr.\"MyTable\"").unwrap();
+        assert_eq!(qualified.sql(), "\"HR\".\"MyTable\"");
     }
 
     #[test]

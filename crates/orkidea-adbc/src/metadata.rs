@@ -245,8 +245,20 @@ pub(crate) fn get_statistic_names() -> Result<Box<dyn RecordBatchReader + Send +
 /// Normalises an identifier the way Oracle resolves names: a name that is
 /// valid unquoted (`customers`) is upper-cased (`CUSTOMERS`), so it can be
 /// queried without quotes; any other name (`Mixed Case`) is kept verbatim, as
-/// a quoted identifier. Embedded double quotes are rejected.
+/// a quoted identifier. A name in double quotes (`"MyTable"`) is taken
+/// exactly, as in Oracle SQL, which is the only way to name a mixed-case
+/// object whose name would also be valid unquoted. Other embedded double
+/// quotes are rejected.
 pub(crate) fn normalize_identifier(value: &str, what: &str) -> Result<String> {
+    if let Some(exact) = quoted_identifier(value) {
+        if exact.is_empty() || exact.contains('"') {
+            return Err(error(
+                format!("{what} {value} is not a valid quoted identifier"),
+                Status::InvalidArguments,
+            ));
+        }
+        return Ok(exact.to_string());
+    }
     if value.trim().is_empty() {
         return Err(error(
             format!("{what} must not be empty"),
@@ -259,8 +271,24 @@ pub(crate) fn normalize_identifier(value: &str, what: &str) -> Result<String> {
     Ok(quoted[1..quoted.len() - 1].to_string())
 }
 
+/// The name inside the double quotes of a quoted identifier (`"MyTable"`).
+fn quoted_identifier(value: &str) -> Option<&str> {
+    value
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+}
+
+/// Splits `schema.table` at its last dot, unless the whole name is one
+/// quoted identifier, which may itself contain dots (`"a.b"`).
+pub(crate) fn split_qualified(table: &str) -> Option<(&str, &str)> {
+    match quoted_identifier(table) {
+        Some(inner) if !inner.contains('"') => None,
+        _ => table.rsplit_once('.'),
+    }
+}
+
 fn qualified_name(schema: Option<&str>, table: &str) -> Result<String> {
-    let (schema, table) = match (schema, table.rsplit_once('.')) {
+    let (schema, table) = match (schema, split_qualified(table)) {
         (Some(schema), _) => (Some(schema), table),
         (None, Some((schema, table))) => (Some(schema), table),
         (None, None) => (None, table),

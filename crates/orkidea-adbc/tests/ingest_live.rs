@@ -118,6 +118,39 @@ fn create_append_and_create_append() {
 }
 
 #[test]
+fn quoted_names_target_mixed_case_tables_and_columns() {
+    let Some(mut conn) = connect() else { return };
+    // "OrkideaMixed" would be upper-cased unquoted; quoted, it is exact.
+    drop_table(&mut conn, "\"OrkideaMixed\"");
+    exec(
+        &mut conn,
+        "CREATE TABLE \"OrkideaMixed\" (\"Id\" NUMBER(10), \"Label\" VARCHAR2(20), LABEL VARCHAR2(20))",
+    );
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("\"Id\"", DataType::Int32, true),
+        Field::new("\"Label\"", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(StringArray::from(vec!["exact", "case"])),
+        ],
+    )
+    .unwrap();
+    let rows = ingest(&mut conn, IngestMode::Append, "\"OrkideaMixed\"", batch).unwrap();
+    assert_eq!(rows, Some(2));
+    assert_eq!(
+        count(
+            &mut conn,
+            "SELECT 1 FROM \"OrkideaMixed\" WHERE \"Label\" IS NOT NULL AND LABEL IS NULL"
+        ),
+        2
+    );
+    drop_table(&mut conn, "\"OrkideaMixed\"");
+}
+
+#[test]
 fn append_matches_columns_by_name() {
     let Some(mut conn) = connect() else { return };
     let table = "ORKIDEA_I_BYNAME";
