@@ -29,6 +29,7 @@ use crate::connection::ConnState;
 use crate::error::{error, expect_bool, expect_int, expect_string, from_oracle};
 use crate::ingest;
 use crate::params::{for_binds, param_row, BindMode};
+use crate::placeholders::Placeholders;
 use crate::reader::{
     cursor_rows, fetched_rows, NoMoreRows, OracleBatchReader, QueuedRows, RowSource, Rows,
 };
@@ -325,16 +326,15 @@ impl OracleStatement {
         }
     }
 
-    /// Bind placeholder names in order of first appearance (client-side; no
-    /// round trip).
-    fn bind_names(&self, sql: &str) -> Result<Vec<String>> {
+    /// The statement's bind placeholders (client-side; no round trip).
+    fn placeholders(&self, sql: &str) -> Result<Placeholders> {
         let conn = self.state.lock()?;
         let stmt = conn
             .statement(sql)
             .map_err(from_oracle)?
             .build()
             .map_err(from_oracle)?;
-        Ok(stmt.bind_names().to_vec())
+        Ok(Placeholders::of(&stmt))
     }
 
     /// The bound parameters ordered for the statement's placeholders.
@@ -342,7 +342,7 @@ impl OracleStatement {
         match self.bound_params()? {
             None => Ok(None),
             Some(batch) => Ok(Some(for_binds(
-                &self.bind_names(sql)?,
+                &self.placeholders(sql)?,
                 batch,
                 self.bind_mode,
             )?)),
@@ -564,17 +564,18 @@ impl OracleStatement {
                 .map_err(from_oracle)?
                 .rows_affected(),
             Some((_, batches)) => {
-                let names = {
+                let placeholders = {
                     let stmt = conn
                         .statement(sql)
                         .map_err(from_oracle)?
                         .build()
                         .map_err(from_oracle)?;
-                    stmt.bind_names().to_vec()
+                    Placeholders::of(&stmt)
                 };
                 let mode = self.bind_mode;
-                let batches: BatchIter =
-                    Box::new(batches.map(move |b| b.and_then(|b| for_binds(&names, b, mode))));
+                let batches: BatchIter = Box::new(
+                    batches.map(move |b| b.and_then(|b| for_binds(&placeholders, b, mode))),
+                );
                 execute_batches(&conn, sql, batches, self.batch_size)?
             }
         };

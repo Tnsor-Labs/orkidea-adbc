@@ -33,6 +33,7 @@ mod ingest;
 mod metadata;
 mod params;
 mod partition;
+mod placeholders;
 mod reader;
 mod statement;
 mod types;

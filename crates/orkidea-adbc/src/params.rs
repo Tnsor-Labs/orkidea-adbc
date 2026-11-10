@@ -38,6 +38,7 @@ use oracledb::{
 
 use crate::convert;
 use crate::error::{error, from_oracle, Result};
+use crate::placeholders::Placeholders;
 
 /// Owned bind values for one parameter row.
 pub(crate) struct ParamRow(Vec<Box<dyn ToDbValue>>);
@@ -493,21 +494,43 @@ fn name_order(bind_names: &[String], schema: &Schema) -> Result<Vec<usize>> {
     Ok(order)
 }
 
-/// Reorders `batch` for binding (see [`BindMode`]).
+/// Orders `batch` for binding to `placeholders` (see [`BindMode`]). Bound by
+/// name, a field is bound once for each use of its placeholder, so SQL that
+/// repeats `:v` takes one `v`. Bound by position, the batch is used as it
+/// is: one field per bind, as ADBC specifies.
 pub(crate) fn for_binds(
-    bind_names: &[String],
+    placeholders: &Placeholders,
     batch: RecordBatch,
     mode: BindMode,
 ) -> Result<RecordBatch> {
-    let order = match mode {
-        BindMode::Auto => auto_order(bind_names, &batch.schema()),
-        BindMode::ByName => Some(name_order(bind_names, &batch.schema())?),
+    let by_name = match mode {
+        BindMode::Auto => auto_order(&placeholders.names, &batch.schema()),
+        BindMode::ByName => Some(name_order(&placeholders.names, &batch.schema())?),
         BindMode::ByPosition => None,
     };
+    let order = by_name.map(|fields| {
+        placeholders
+            .uses
+            .iter()
+            .map(|name| {
+                let index = placeholders
+                    .names
+                    .iter()
+                    .position(|n| n == name)
+                    .expect("every use is of a listed name");
+                fields[index]
+            })
+            .collect::<Vec<_>>()
+    });
     match order {
-        Some(order) if order.iter().enumerate().any(|(i, &j)| i != j) => batch
-            .project(&order)
-            .map_err(|e| error(e.to_string(), Status::Internal)),
+        Some(order)
+            if order.len() != batch.num_columns()
+                || order.iter().enumerate().any(|(i, &j)| i != j) =>
+        {
+            batch
+                .project(&order)
+                .map_err(|e| error(e.to_string(), Status::Internal))
+        }
         _ => Ok(batch),
     }
 }
@@ -585,8 +608,49 @@ mod tests {
             .collect()
     }
 
-    fn binds(names: &[&str]) -> Vec<String> {
-        names.iter().map(|n| n.to_string()).collect()
+    fn binds(names: &[&str]) -> Placeholders {
+        let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+        Placeholders {
+            uses: names.clone(),
+            names,
+        }
+    }
+
+    fn repeating(names: &[&str], uses: &[&str]) -> Placeholders {
+        Placeholders {
+            names: names.iter().map(|n| n.to_string()).collect(),
+            uses: uses.iter().map(|n| n.to_string()).collect(),
+        }
+    }
+
+    fn values(batch: &RecordBatch) -> Vec<i32> {
+        batch
+            .columns()
+            .iter()
+            .map(|c| c.as_primitive::<Int32Type>().value(0))
+            .collect()
+    }
+
+    #[test]
+    fn by_name_binds_a_field_for_each_use() {
+        let sql = repeating(&["A", "B"], &["A", "B", "A"]);
+        for mode in [BindMode::Auto, BindMode::ByName] {
+            let bound = for_binds(&sql, named(&["b", "a"]), mode).unwrap();
+            assert_eq!(field_names(&bound), ["a", "b", "a"]);
+            assert_eq!(values(&bound), [1, 0, 1]);
+        }
+        // In order already, a repeat still needs its own column.
+        let bound = for_binds(&sql, named(&["a", "b"]), BindMode::ByName).unwrap();
+        assert_eq!(values(&bound), [0, 1, 0]);
+    }
+
+    #[test]
+    fn by_position_takes_a_field_for_each_use() {
+        let sql = repeating(&["A"], &["A", "A"]);
+        let bound = for_binds(&sql, named(&["p1", "p2"]), BindMode::Auto).unwrap();
+        assert_eq!(values(&bound), [0, 1]);
+        let bound = for_binds(&sql, named(&["x", "y"]), BindMode::ByPosition).unwrap();
+        assert_eq!(values(&bound), [0, 1]);
     }
 
     #[test]

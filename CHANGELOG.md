@@ -58,6 +58,13 @@ pushed (see [docs/release.md](docs/release.md)).
   first character of the line after a comment. The fork that Orkidea builds
   with now includes the fix, and a live test connects through an alias
   written that way.
+- **A placeholder used twice in SQL binds by name** -- @hc12r. Bound by name
+  (a DB-API `dict`, or `adbc.statement.bind_by_name`), SQL that used a
+  placeholder more than once, as in `WHERE a = :v OR b = :v`, failed with
+  "2 positional bind values are required but 1 were provided". In SQL each
+  use is a bind of its own, and the driver supplied one value per name. It
+  now binds the field to every use, for queries, DML, and `RETURNING`.
+  Binding by position, and PL/SQL, are unchanged.
 
 ### Documentation
 

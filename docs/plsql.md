@@ -13,8 +13,13 @@ field name (case-insensitively). Field order does not matter:
 BEGIN :doubled := :n * 2; END;   -- fields "n" and "doubled", in any order
 ```
 
-Otherwise parameters bind **by position**, in order of each placeholder's
-first appearance (`:1`, `:2`, ...).
+Otherwise parameters bind **by position** (`:1`, `:2`, ...).
+
+A name can appear more than once. In SQL, each use is a bind of its own:
+bound by name, one field supplies every use of its placeholder, so
+`WHERE a = :v OR b = :v` takes a single field `v`; bound by position, it takes
+one field per use, in order. In PL/SQL a name binds once, so a PL/SQL block
+takes one field per name, in order of first appearance, either way.
 
 The statement option `adbc.statement.bind_by_name` makes the choice explicit.
 With `true`, every placeholder must match exactly one field name, and every
