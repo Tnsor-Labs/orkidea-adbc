@@ -69,7 +69,7 @@ pub(crate) fn from_oracle(err: OracleError) -> AdbcError {
         }
         ErrorKind::UnsupportedArrowType(_)
         | ErrorKind::UnsupportedConversion(_, _)
-        | ErrorKind::CannotConvertToArrowDecimal128(_, _, _)
+        | ErrorKind::CannotConvertToArrowDecimal(_, _, _)
         | ErrorKind::WrongArrowSchemaLength(_, _)
         | ErrorKind::ValueWasNull
         | ErrorKind::IntegerTooLarge(_, _)

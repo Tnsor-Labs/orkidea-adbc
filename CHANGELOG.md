@@ -13,6 +13,20 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Behaviour changes to read before upgrading
+
+- **Arrow 60** -- @hc12r. The Rust crate's API uses `arrow-array` and
+  `arrow-schema` 60 (was 59), so a Rust program that passes Arrow data to it
+  needs Arrow 60 too. The C driver and the Python package are unaffected:
+  they exchange data through the Arrow C data interface.
+
+### Packaging
+
+- **Built on `oracledb`'s main branch** -- @hc12r. `oracledb` 26.0.0-beta.6,
+  not yet released, fixes wide rows of an already-parsed statement (#80) in
+  its own way, so the fork now carries only the `tnsnames.ora` fix (#83) and
+  row sinks (#85) on top of it. It also brings Arrow 60.
+
 ### Queries and types
 
 - **Intervals and ROWIDs are decoded straight into Arrow columns too** --
