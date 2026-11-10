@@ -41,4 +41,4 @@ debug = "line-tables-only"
 # arrow-row-sink branch is that release plus those commits, and one marking
 # the files they change. Remove once a release includes all three.
 [patch.crates-io]
-oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "0f147cd6232be5b8a631a1cbcff94b7e0882cc2e" }
+oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "d90e2d5a583418f37ff1f98c56d6f8675c365c7a" }

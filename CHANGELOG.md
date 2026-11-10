@@ -13,6 +13,13 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Queries and types
+
+- **Intervals and ROWIDs are decoded straight into Arrow columns too** --
+  @hc12r. `INTERVAL DAY TO SECOND`, `INTERVAL YEAR TO MONTH`, `ROWID`, and
+  `UROWID` columns no longer make a query read row by row. `JSON`, `VECTOR`,
+  and object columns still do.
+
 ## [0.3.0] - 2026-11-10
 
 Orkidea 0.3.0 reads results two to three times as fast: values go from the

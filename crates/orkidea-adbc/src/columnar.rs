@@ -16,8 +16,9 @@
 //! `oracledb`'s [`Cursor::fetch_into`] hands each value of a fetched row to a
 //! [`RowSink`] as the bytes it arrived as. [`Columns`] decodes them into one
 //! buffer per column, which become Arrow arrays. It takes the columns of the
-//! common types (numbers, text, raw, booleans, binary floats, dates, and
-//! timestamps); a query with any other column is read as rows.
+//! common types (numbers, text, raw, booleans, binary floats, dates,
+//! timestamps, intervals, and ROWIDs); a query with any other column is read
+//! as rows.
 //!
 //! Rows the cursor already holds (those that came with the execute) are
 //! appended from [`Row`]s, with the conversions of the row reader, so a
@@ -33,7 +34,10 @@ use arrow_array::{
 };
 use arrow_buffer::{i256, BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, TimeUnit};
-use oracledb::{Cursor, Metadata, OracleNumber, OracleTimestamp, Row, RowSink, WireValue};
+use oracledb::{
+    Cursor, Metadata, OracleIntervalDS, OracleIntervalYM, OracleNumber, OracleTimestamp, Row,
+    RowSink, WireValue,
+};
 
 use crate::convert;
 use crate::error::{error, from_oracle, Result};
@@ -58,6 +62,12 @@ enum Kind {
     Binary,
     LargeBinary,
     Timestamp(TimeUnit),
+    /// `ROWID` or `UROWID`, as its text.
+    RowId,
+    /// `INTERVAL DAY TO SECOND`, as a duration.
+    Duration(TimeUnit),
+    /// `INTERVAL YEAR TO MONTH`, in months.
+    IntervalYearToMonth,
 }
 
 /// The kind of column a plan reads, when values of its Oracle type can be
@@ -91,6 +101,11 @@ fn kind(reader: &Reader, db_type: &oracledb::DbType) -> Option<Kind> {
         Reader::Binary if raw => Kind::Binary,
         Reader::LargeBinary if raw => Kind::LargeBinary,
         Reader::Timestamp(unit) if datetime => Kind::Timestamp(*unit),
+        Reader::RowId if db_type == DB_TYPE_ROWID || db_type == DB_TYPE_UROWID => Kind::RowId,
+        Reader::IntervalDayToSecond(unit) if db_type == DB_TYPE_INTERVAL_DS => {
+            Kind::Duration(*unit)
+        }
+        Reader::IntervalYearToMonth if db_type == DB_TYPE_INTERVAL_YM => Kind::IntervalYearToMonth,
         _ => return None,
     };
     Some(kind)
@@ -163,20 +178,27 @@ enum Values {
 impl Values {
     fn new(kind: Kind, capacity: usize) -> Self {
         match kind {
-            Kind::Int8 | Kind::Int16 | Kind::Int32 | Kind::Int64 | Kind::Timestamp(_) => {
-                Self::I64(Vec::with_capacity(capacity))
-            }
+            Kind::Int8
+            | Kind::Int16
+            | Kind::Int32
+            | Kind::Int64
+            | Kind::Timestamp(_)
+            | Kind::Duration(_)
+            | Kind::IntervalYearToMonth => Self::I64(Vec::with_capacity(capacity)),
             Kind::Float32 => Self::F32(Vec::with_capacity(capacity)),
             Kind::Float64 => Self::F64(Vec::with_capacity(capacity)),
             Kind::Decimal128(..) => Self::I128(Vec::with_capacity(capacity)),
             Kind::Decimal256(..) => Self::I256(Vec::with_capacity(capacity)),
             Kind::Boolean => Self::Bool(Vec::with_capacity(capacity)),
-            Kind::NumberText | Kind::Utf8 | Kind::LargeUtf8 | Kind::Binary | Kind::LargeBinary => {
-                Self::Bytes {
-                    data: Vec::new(),
-                    ends: Vec::with_capacity(capacity),
-                }
-            }
+            Kind::NumberText
+            | Kind::Utf8
+            | Kind::LargeUtf8
+            | Kind::RowId
+            | Kind::Binary
+            | Kind::LargeBinary => Self::Bytes {
+                data: Vec::new(),
+                ends: Vec::with_capacity(capacity),
+            },
         }
     }
 
@@ -374,6 +396,18 @@ impl Column {
                 convert::timestamp_to_arrow(&WireValue::timestamp(bytes), unit)
                     .map_err(|e| with_column(e, &self.name))?,
             ),
+            (Values::I64(v), Kind::Duration(unit), WireValue::IntervalDS(bytes)) => v.push(
+                convert::interval_ds_to_arrow(&WireValue::interval_ds(bytes), unit)
+                    .map_err(|e| with_column(e, &self.name))?,
+            ),
+            (Values::I64(v), Kind::IntervalYearToMonth, WireValue::IntervalYM(bytes)) => v.push(
+                convert::interval_ym_to_months(&WireValue::interval_ym(bytes))
+                    .map_err(|e| with_column(e, &self.name))?
+                    .into(),
+            ),
+            (values @ Values::Bytes { .. }, Kind::RowId, WireValue::Rowid(text)) => {
+                values.push_bytes(text.as_bytes())
+            }
             (_, kind, _) => {
                 return Err(error(
                     format!("column {:?}: unexpected value for {kind:?}", self.name),
@@ -448,6 +482,23 @@ impl Column {
                     .map_err(|e| with_column(e, &self.name))?;
                 push_option(v, value)
             }
+            (Values::I64(v), Kind::Duration(unit)) => {
+                let value = get!(OracleIntervalDS)
+                    .map(|i| convert::interval_ds_to_arrow(&i, unit))
+                    .transpose()
+                    .map_err(|e| with_column(e, &self.name))?;
+                push_option(v, value)
+            }
+            (Values::I64(v), Kind::IntervalYearToMonth) => {
+                let value = get!(OracleIntervalYM)
+                    .map(|i| convert::interval_ym_to_months(&i))
+                    .transpose()
+                    .map_err(|e| with_column(e, &self.name))?;
+                push_option(v, value.map(i64::from))
+            }
+            (values @ Values::Bytes { .. }, Kind::RowId) => {
+                push_bytes_option(values, get!(String).as_deref().map(str::as_bytes))
+            }
             (_, kind) => {
                 return Err(error(
                     format!("column {:?}: unexpected {kind:?} column", self.name),
@@ -490,7 +541,17 @@ impl Column {
                 v.into_iter().map(|n| n as i8).collect(),
                 nulls,
             )),
-            (Values::I64(v), Kind::Timestamp(_)) => {
+            (Values::I64(v), Kind::IntervalYearToMonth) => {
+                let months = Int32Array::new(v.into_iter().map(|n| n as i32).collect(), nulls);
+                let data = months
+                    .into_data()
+                    .into_builder()
+                    .data_type(data_type.clone())
+                    .build()
+                    .map_err(internal)?;
+                make_array(data)
+            }
+            (Values::I64(v), Kind::Timestamp(_) | Kind::Duration(_)) => {
                 let data = Int64Array::new(v.into(), nulls)
                     .into_data()
                     .into_builder()
@@ -515,7 +576,7 @@ impl Column {
             (Values::Bytes { data, ends }, kind) => {
                 let data = Buffer::from_vec(data);
                 match kind {
-                    Kind::NumberText | Kind::Utf8 => {
+                    Kind::NumberText | Kind::Utf8 | Kind::RowId => {
                         Arc::new(StringArray::try_new(offsets(&ends)?, data, nulls).map_err(
                             |e| error(format!("column {:?}: {e}", self.name), Status::InvalidData),
                         )?)

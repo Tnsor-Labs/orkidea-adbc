@@ -69,6 +69,10 @@ const ALL_TYPES: &str = "
         TIMESTAMP '2025-01-01 10:00:00.123456' + NUMTODSINTERVAL(level, 'SECOND') AS ts,
         FROM_TZ(TIMESTAMP '2025-01-01 10:00:00', '+02:00') + NUMTODSINTERVAL(level, 'MINUTE') AS tstz,
         MOD(level, 2) = 0 AS flag,
+        CASE WHEN MOD(level, 6) = 0 THEN NULL
+            ELSE NUMTODSINTERVAL(level * 1.5 - 2000, 'SECOND') END AS ids,
+        CAST(NUMTODSINTERVAL(level, 'DAY') AS INTERVAL DAY(9) TO SECOND(0)) AS days,
+        NUMTOYMINTERVAL(MOD(level, 30) - 15, 'MONTH') AS iym,
         CASE WHEN MOD(level, 5) = 0 THEN NULL ELSE TO_CLOB('clob ' || level) END AS cl,
         TO_BLOB(HEXTORAW('FF' || TO_CHAR(MOD(level, 256), 'FM0X'))) AS bl,
         'same' AS constant
@@ -179,4 +183,40 @@ fn the_option_takes_true_or_false() {
     database
         .set_option(key, OptionValue::String("false".into()))
         .unwrap();
+}
+
+#[test]
+fn rowids_of_heap_and_index_organized_tables() {
+    let Some(mut conn) = connect() else {
+        return;
+    };
+    for (table, options) in [
+        ("ORKIDEA_COLUMNAR_HEAP", ""),
+        ("ORKIDEA_COLUMNAR_IOT", " ORGANIZATION INDEX"),
+    ] {
+        drop_table(&mut conn, table);
+        exec(
+            &mut conn,
+            &format!("CREATE TABLE {table} (id NUMBER(9) PRIMARY KEY, name VARCHAR2(30)){options}"),
+        );
+        exec(
+            &mut conn,
+            &format!(
+                "INSERT INTO {table} SELECT level, 'name ' || level FROM dual CONNECT BY level <= 2500"
+            ),
+        );
+        // Physical ROWIDs, logical ones (UROWID), and NULLs.
+        let batches = read_both_ways(
+            &format!(
+                "SELECT ROWID AS rid, id, CASE WHEN MOD(id, 7) = 0 THEN NULL ELSE ROWID END AS maybe \
+                 FROM {table} ORDER BY id"
+            ),
+            &[("oracle.batch_size", OptionValue::Int(1000))],
+        );
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            2500
+        );
+        drop_table(&mut conn, table);
+    }
 }

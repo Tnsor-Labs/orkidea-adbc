@@ -717,7 +717,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "oracledb"
 version = "26.0.0-beta.5"
-source = "git+https://github.com/Tnsor-Labs/rust-oracledb?rev=0f147cd6232be5b8a631a1cbcff94b7e0882cc2e#0f147cd6232be5b8a631a1cbcff94b7e0882cc2e"
+source = "git+https://github.com/Tnsor-Labs/rust-oracledb?rev=d90e2d5a583418f37ff1f98c56d6f8675c365c7a#d90e2d5a583418f37ff1f98c56d6f8675c365c7a"
 dependencies = [
  "aes",
  "arrow-array",
