@@ -41,4 +41,4 @@ debug = "line-tables-only"
 # commit plus those two, and one marking the files they change. Remove once
 # a release includes both.
 [patch.crates-io]
-oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "de04d09e618602b6787f429bcac6f84068fb2282" }
+oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "ffeb2ae3843681f465bb8681de61eff59f91f532" }

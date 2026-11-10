@@ -241,3 +241,30 @@ fn json_and_vectors() {
         &[("oracle.batch_size", OptionValue::Int(1000))],
     );
 }
+
+#[test]
+fn json_documents_of_every_shape() {
+    // Typed scalars (JSON_OBJECT ... RETURNING JSON keeps them), a scalar
+    // document, nesting, escapes, Unicode, and an object with more field names
+    // than one byte numbers.
+    read_both_ways(
+        "SELECT CAST(level AS NUMBER(9)) AS id,
+                JSON_OBJECT('ts' VALUE TIMESTAMP '2025-01-02 03:04:05.678' + NUMTODSINTERVAL(level, 'SECOND'),
+                            'day' VALUE DATE '2025-01-01' + level,
+                            'raw' VALUE HEXTORAW('0AFF' || TO_CHAR(MOD(level, 256), 'FM0X')),
+                            'dbl' VALUE TO_BINARY_DOUBLE(level / 8),
+                            'ivl' VALUE NUMTODSINTERVAL(level, 'MINUTE'),
+                            'txt' VALUE 'quote \" back \\ tab ' || CHR(9) || ' é 😀 ' || level,
+                            'nul' VALUE NULL, 'yes' VALUE level > 5
+                            ABSENT ON NULL RETURNING JSON) AS typed,
+                JSON('[1,[2,[3,{\"deep\":[{},[]]}]],{\"z\":1,\"a\":2,\"m\":{\"y\":0,\"b\":1}}]') AS nested,
+                JSON_SCALAR(level * 1.5) AS scalar
+         FROM dual CONNECT BY level <= 1200 ORDER BY id",
+        &[("oracle.batch_size", OptionValue::Int(500))],
+    );
+    read_both_ways(
+        "SELECT JSON_OBJECTAGG(KEY 'field_' || level VALUE level RETURNING JSON) AS wide
+         FROM dual CONNECT BY level <= 300",
+        &[],
+    );
+}

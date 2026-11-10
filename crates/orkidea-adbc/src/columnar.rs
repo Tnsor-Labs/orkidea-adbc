@@ -39,6 +39,7 @@ use oracledb::{
 };
 
 use crate::convert;
+use crate::convert::JsonTextWriter;
 use crate::error::{error, from_oracle, Result};
 use crate::reader::VectorBuilder;
 use crate::types::{ColumnPlan, Reader, VectorKind};
@@ -304,6 +305,9 @@ struct Column {
     name: String,
     values: Values,
     valid: Vec<bool>,
+    /// For a JSON column: the writer its text is decoded with, kept to reuse
+    /// its buffer.
+    json: Option<JsonTextWriter>,
 }
 
 impl Column {
@@ -422,8 +426,11 @@ impl Column {
                     .into(),
             ),
             (values @ Values::Bytes { .. }, Kind::Json, WireValue::Json(bytes)) => {
-                let value = WireValue::json(bytes).map_err(from_oracle)?;
-                values.push_bytes(convert::json_to_string(&value).as_bytes())
+                // Straight from OSON to text, without a JsonValue.
+                let writer = self.json.get_or_insert_with(JsonTextWriter::default);
+                writer.out.clear();
+                WireValue::visit_json(bytes, writer).map_err(from_oracle)?;
+                values.push_bytes(writer.out.as_bytes())
             }
             (Values::Vectors(v), Kind::Vector(_), WireValue::Vector(bytes)) => {
                 v.push(Some(WireValue::vector(bytes).map_err(from_oracle)?))
@@ -735,6 +742,7 @@ impl Columns {
                     name: plan.field.name().clone(),
                     values: Values::new(kind, capacity),
                     valid: Vec::with_capacity(capacity),
+                    json: None,
                 })
             })
             .collect::<Option<Vec<_>>>()?;

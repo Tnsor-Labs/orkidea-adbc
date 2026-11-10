@@ -29,6 +29,11 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ### Queries and types
 
+- **JSON is decoded straight to text** -- @hc12r. A `JSON` value was
+  decoded into a tree of values (a hash map for each object), then written
+  as text. Its binary form (OSON) is now written as text as it is decoded,
+  with the same result. Reading 300,000 small documents takes 1.5 s instead
+  of 2.1 s, and 0.7 s of CPU instead of 1.3 s.
 - **Every column type is decoded straight into Arrow columns** -- @hc12r.
   `INTERVAL DAY TO SECOND`, `INTERVAL YEAR TO MONTH`, `ROWID`, `UROWID`,
   `JSON`, `VECTOR`, and `NCLOB` columns no longer make a query read row by

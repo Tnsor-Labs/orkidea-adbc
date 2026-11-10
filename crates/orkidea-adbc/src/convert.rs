@@ -30,7 +30,9 @@ use std::fmt::Write;
 use adbc_core::error::Status;
 use arrow_buffer::i256;
 use arrow_schema::TimeUnit;
-use oracledb::{JsonValue, OracleIntervalDS, OracleIntervalYM, OracleNumber, OracleTimestamp};
+use oracledb::{
+    JsonScalar, JsonValue, OracleIntervalDS, OracleIntervalYM, OracleNumber, OracleTimestamp,
+};
 
 use crate::error::{error, Result};
 
@@ -326,54 +328,6 @@ pub(crate) fn json_to_string(value: &JsonValue) -> String {
 
 fn write_json(out: &mut String, value: &JsonValue) {
     match value {
-        JsonValue::Null => out.push_str("null"),
-        JsonValue::Boolean(b) => out.push_str(if *b { "true" } else { "false" }),
-        JsonValue::Number(n) => {
-            let _ = write!(out, "{n}");
-        }
-        JsonValue::BinaryDouble(v) => write_json_float(out, *v),
-        JsonValue::BinaryFloat(v) => write_json_float(out, f64::from(*v)),
-        JsonValue::String(s) => write_json_string(out, s),
-        JsonValue::Raw(bytes) | JsonValue::JsonId(bytes) => write_hex(out, bytes),
-        JsonValue::Timestamp(ts) => {
-            let text = ts.to_string();
-            write_json_string(out, &text);
-        }
-        JsonValue::IntervalDS(v) => {
-            let sign = if v.days() < 0
-                || v.hours() < 0
-                || v.minutes() < 0
-                || v.seconds() < 0
-                || v.nanoseconds() < 0
-            {
-                "-"
-            } else {
-                ""
-            };
-            let text = format!(
-                "{sign}P{}DT{}H{}M{}.{:09}S",
-                v.days().unsigned_abs(),
-                v.hours().unsigned_abs(),
-                v.minutes().unsigned_abs(),
-                v.seconds().unsigned_abs(),
-                v.nanoseconds().unsigned_abs()
-            );
-            write_json_string(out, &text);
-        }
-        JsonValue::IntervalYM(v) => {
-            let sign = if v.years() < 0 || v.months() < 0 {
-                "-"
-            } else {
-                ""
-            };
-            let text = format!(
-                "{sign}P{}Y{}M",
-                v.years().unsigned_abs(),
-                v.months().unsigned_abs()
-            );
-            write_json_string(out, &text);
-        }
-        JsonValue::Vector(vector) => write_vector(out, vector),
         JsonValue::JsonArray(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
@@ -398,6 +352,198 @@ fn write_json(out: &mut String, value: &JsonValue) {
             }
             out.push('}');
         }
+        JsonValue::Null => write_json_scalar(out, &JsonScalar::Null),
+        JsonValue::Boolean(b) => write_json_scalar(out, &JsonScalar::Boolean(*b)),
+        JsonValue::Number(n) => write_json_scalar(out, &JsonScalar::Number(*n)),
+        JsonValue::BinaryDouble(v) => write_json_scalar(out, &JsonScalar::BinaryDouble(*v)),
+        JsonValue::BinaryFloat(v) => write_json_scalar(out, &JsonScalar::BinaryFloat(*v)),
+        JsonValue::String(s) => write_json_scalar(out, &JsonScalar::String(s)),
+        JsonValue::Raw(bytes) | JsonValue::JsonId(bytes) => {
+            write_json_scalar(out, &JsonScalar::Raw(bytes))
+        }
+        JsonValue::Timestamp(ts) => write_json_scalar(out, &JsonScalar::Timestamp(*ts)),
+        JsonValue::IntervalDS(v) => write_json_scalar(out, &JsonScalar::IntervalDS(*v)),
+        JsonValue::IntervalYM(v) => write_json_scalar(out, &JsonScalar::IntervalYM(*v)),
+        JsonValue::Vector(vector) => write_vector(out, vector),
+    }
+}
+
+/// Writes a JSON scalar as [`json_to_string`] does.
+pub(crate) fn write_json_scalar(out: &mut String, value: &JsonScalar<'_>) {
+    match value {
+        JsonScalar::Null => out.push_str("null"),
+        JsonScalar::Boolean(b) => out.push_str(if *b { "true" } else { "false" }),
+        JsonScalar::Number(n) => {
+            let _ = write!(out, "{n}");
+        }
+        JsonScalar::BinaryDouble(v) => write_json_float(out, *v),
+        JsonScalar::BinaryFloat(v) => write_json_float(out, f64::from(*v)),
+        JsonScalar::String(s) => write_json_string(out, s),
+        JsonScalar::Raw(bytes) => write_hex(out, bytes),
+        JsonScalar::Timestamp(ts) => {
+            let text = ts.to_string();
+            write_json_string(out, &text);
+        }
+        JsonScalar::IntervalDS(v) => {
+            let sign = if v.days() < 0
+                || v.hours() < 0
+                || v.minutes() < 0
+                || v.seconds() < 0
+                || v.nanoseconds() < 0
+            {
+                "-"
+            } else {
+                ""
+            };
+            let text = format!(
+                "{sign}P{}DT{}H{}M{}.{:09}S",
+                v.days().unsigned_abs(),
+                v.hours().unsigned_abs(),
+                v.minutes().unsigned_abs(),
+                v.seconds().unsigned_abs(),
+                v.nanoseconds().unsigned_abs()
+            );
+            write_json_string(out, &text);
+        }
+        JsonScalar::IntervalYM(v) => {
+            let sign = if v.years() < 0 || v.months() < 0 {
+                "-"
+            } else {
+                ""
+            };
+            let text = format!(
+                "{sign}P{}Y{}M",
+                v.years().unsigned_abs(),
+                v.months().unsigned_abs()
+            );
+            write_json_string(out, &text);
+        }
+        JsonScalar::Vector(vector) => write_vector(out, vector),
+    }
+}
+
+/// Writes JSON text as an OSON decoder visits a document, as
+/// [`json_to_string`] writes the decoded [`JsonValue`]: object members are
+/// sorted by name (and, as in the value's map, the last of a repeated name
+/// wins), so both give the same text.
+#[derive(Default)]
+pub(crate) struct JsonTextWriter {
+    pub(crate) out: String,
+    containers: Vec<Container>,
+}
+
+enum Container {
+    Array { items: usize },
+    Object { start: usize, members: Vec<Member> },
+}
+
+/// One member of an object being written: its name, and where its text
+/// (`"name":value`) starts and ends in the output.
+struct Member {
+    name: String,
+    start: usize,
+    end: usize,
+}
+
+impl JsonTextWriter {
+    /// Before a value: the comma between array items.
+    fn value(&mut self) {
+        if let Some(Container::Array { items }) = self.containers.last_mut() {
+            if *items > 0 {
+                self.out.push(',');
+            }
+            *items += 1;
+        }
+    }
+
+    /// Closes the last member of the innermost object.
+    fn close_member(&mut self) {
+        let end = self.out.len();
+        if let Some(Container::Object { members, .. }) = self.containers.last_mut() {
+            if let Some(last) = members.last_mut() {
+                last.end = end;
+            }
+        }
+    }
+}
+
+impl oracledb::JsonVisitor for JsonTextWriter {
+    fn begin_object(&mut self, fields: usize) -> std::result::Result<(), oracledb::Error> {
+        self.value();
+        self.out.push('{');
+        self.containers.push(Container::Object {
+            start: self.out.len(),
+            members: Vec::with_capacity(fields),
+        });
+        Ok(())
+    }
+
+    fn field_name(&mut self, name: &str) -> std::result::Result<(), oracledb::Error> {
+        self.close_member();
+        let Some(Container::Object { members, .. }) = self.containers.last_mut() else {
+            return Ok(());
+        };
+        if !members.is_empty() {
+            self.out.push(',');
+        }
+        let start = self.out.len();
+        members.push(Member {
+            name: name.to_string(),
+            start,
+            end: start,
+        });
+        write_json_string(&mut self.out, name);
+        self.out.push(':');
+        Ok(())
+    }
+
+    fn end_object(&mut self) -> std::result::Result<(), oracledb::Error> {
+        self.close_member();
+        if let Some(Container::Object { start, mut members }) = self.containers.pop() {
+            let in_order = members.windows(2).all(|pair| pair[0].name < pair[1].name);
+            if !in_order {
+                // Stable, so that among repeated names the last stays last.
+                members.sort_by(|a, b| a.name.cmp(&b.name));
+                let mut text = String::with_capacity(self.out.len() - start);
+                let mut first = true;
+                for (i, member) in members.iter().enumerate() {
+                    if members
+                        .get(i + 1)
+                        .is_some_and(|next| next.name == member.name)
+                    {
+                        continue;
+                    }
+                    if !first {
+                        text.push(',');
+                    }
+                    first = false;
+                    text.push_str(&self.out[member.start..member.end]);
+                }
+                self.out.truncate(start);
+                self.out.push_str(&text);
+            }
+        }
+        self.out.push('}');
+        Ok(())
+    }
+
+    fn begin_array(&mut self, _items: usize) -> std::result::Result<(), oracledb::Error> {
+        self.value();
+        self.out.push('[');
+        self.containers.push(Container::Array { items: 0 });
+        Ok(())
+    }
+
+    fn end_array(&mut self) -> std::result::Result<(), oracledb::Error> {
+        self.containers.pop();
+        self.out.push(']');
+        Ok(())
+    }
+
+    fn scalar(&mut self, value: JsonScalar<'_>) -> std::result::Result<(), oracledb::Error> {
+        self.value();
+        write_json_scalar(&mut self.out, &value);
+        Ok(())
     }
 }
 
@@ -425,6 +571,107 @@ pub(crate) fn write_vector(out: &mut String, vector: &oracledb::Vector) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Puts an object's member names in the order an OSON decoder visits them.
+    type MemberOrder = dyn Fn(&mut Vec<&String>);
+
+    /// Visits a JsonValue as an OSON decoder would, with object members in
+    /// the given order.
+    fn visit(writer: &mut JsonTextWriter, value: &JsonValue, order: &MemberOrder) {
+        use oracledb::JsonVisitor;
+        match value {
+            JsonValue::JsonObject(map) => {
+                writer.begin_object(map.len()).unwrap();
+                let mut keys: Vec<&String> = map.keys().collect();
+                order(&mut keys);
+                for key in keys {
+                    writer.field_name(key).unwrap();
+                    visit(writer, &map[key], order);
+                }
+                writer.end_object().unwrap();
+            }
+            JsonValue::JsonArray(items) => {
+                writer.begin_array(items.len()).unwrap();
+                for item in items {
+                    visit(writer, item, order);
+                }
+                writer.end_array().unwrap();
+            }
+            JsonValue::String(s) => writer.scalar(JsonScalar::String(s)).unwrap(),
+            JsonValue::Number(n) => writer.scalar(JsonScalar::Number(*n)).unwrap(),
+            JsonValue::Boolean(b) => writer.scalar(JsonScalar::Boolean(*b)).unwrap(),
+            JsonValue::Null => writer.scalar(JsonScalar::Null).unwrap(),
+            JsonValue::BinaryDouble(v) => writer.scalar(JsonScalar::BinaryDouble(*v)).unwrap(),
+            JsonValue::Raw(b) => writer.scalar(JsonScalar::Raw(b)).unwrap(),
+            JsonValue::Timestamp(t) => writer.scalar(JsonScalar::Timestamp(*t)).unwrap(),
+            other => panic!("not used here: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn json_text_writer_writes_what_json_to_string_does() {
+        use std::collections::HashMap;
+        let n = |s: &str| JsonValue::Number(s.parse().unwrap());
+        let object = |pairs: Vec<(&str, JsonValue)>| {
+            JsonValue::JsonObject(
+                pairs
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect::<HashMap<_, _>>(),
+            )
+        };
+        let doc = object(vec![
+            ("zeta", n("1")),
+            (
+                "alpha",
+                JsonValue::String("quote \" back \\ tab \t é 😀".into()),
+            ),
+            (
+                "mid",
+                JsonValue::JsonArray(vec![
+                    object(vec![
+                        ("b", JsonValue::Null),
+                        ("a", JsonValue::Boolean(true)),
+                    ]),
+                    JsonValue::JsonArray(vec![]),
+                    object(vec![]),
+                    n("-12.5"),
+                    JsonValue::BinaryDouble(1.25),
+                    JsonValue::Raw(vec![0, 255, 16]),
+                    JsonValue::Timestamp(OracleTimestamp::new_timestamp(2025, 3, 4, 5, 6, 7, 8)),
+                ]),
+            ),
+            ("", JsonValue::String(String::new())),
+            ("Beta", n("0.000000000000000000000000000000001")),
+        ]);
+        let expected = json_to_string(&doc);
+        // Members in the order the map gives them, reversed, and sorted.
+        let orders: [&MemberOrder; 3] = [&|_| {}, &|keys| keys.reverse(), &|keys| keys.sort()];
+        for order in orders {
+            let mut writer = JsonTextWriter::default();
+            visit(&mut writer, &doc, order);
+            assert_eq!(writer.out, expected);
+        }
+        // A scalar document.
+        let mut writer = JsonTextWriter::default();
+        visit(&mut writer, &n("42"), &|_| {});
+        assert_eq!(writer.out, "42");
+    }
+
+    #[test]
+    fn json_text_writer_keeps_the_last_of_a_repeated_name() {
+        use oracledb::JsonVisitor;
+        let mut writer = JsonTextWriter::default();
+        writer.begin_object(3).unwrap();
+        for (name, value) in [("b", "1"), ("a", "2"), ("b", "3")] {
+            writer.field_name(name).unwrap();
+            writer
+                .scalar(JsonScalar::Number(value.parse().unwrap()))
+                .unwrap();
+        }
+        writer.end_object().unwrap();
+        assert_eq!(writer.out, r#"{"a":2,"b":3}"#);
+    }
 
     #[test]
     fn epoch_and_modern_dates() {
