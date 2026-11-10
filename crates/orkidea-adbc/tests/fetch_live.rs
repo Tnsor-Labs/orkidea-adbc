@@ -25,6 +25,7 @@ use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 
 mod common;
 use common::*;
+use orkidea_adbc::OracleConnection;
 
 #[test]
 fn streams_large_results_in_bounded_batches() {
@@ -493,6 +494,42 @@ fn bound_parameters_execute_once_per_row() {
     let s = batch.column(1).as_string::<i32>();
     assert_eq!(s.value(0), "a");
     assert!(s.is_null(1));
+}
+
+/// A prepared statement runs with its parameters even when the same SQL ran
+/// to the end before on the connection, as with a second DB-API cursor. The
+/// prepare used to parse the cached statement and leave it without binds
+/// (ORA-01008).
+#[test]
+fn prepare_after_the_same_query_ran_keeps_its_binds() {
+    let Some(mut conn) = connect() else { return };
+    let run = |conn: &mut OracleConnection, prepare: bool| -> i64 {
+        let mut stmt = conn.new_statement().unwrap();
+        stmt.set_sql_query("SELECT CAST(:n * 2 AS NUMBER(9)) AS doubled FROM dual")
+            .unwrap();
+        if prepare {
+            stmt.prepare().unwrap();
+        }
+        let params = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, true)])),
+            vec![Arc::new(Int64Array::from(vec![21]))],
+        )
+        .unwrap();
+        stmt.bind(params).unwrap();
+        let batches = stmt
+            .execute()
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        arrow_select_concat(&batches)
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .value(0)
+            .into()
+    };
+    for prepare in [false, true, true, false, true] {
+        assert_eq!(run(&mut conn, prepare), 42, "prepare = {prepare}");
+    }
 }
 
 fn arrow_select_concat(batches: &[RecordBatch]) -> RecordBatch {

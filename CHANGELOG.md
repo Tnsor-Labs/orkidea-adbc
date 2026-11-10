@@ -13,6 +13,18 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A second cursor can run the same query with parameters** -- @hc12r.
+  Once a query with parameters had been fetched to the end, preparing the
+  same SQL again on the connection, as every new DB-API cursor does, made
+  its execution fail with "ORA-01008: value for bind variable placeholder
+  was not provided". `oracledb` 26.0.0-beta.5 closes the cursor of a fully
+  fetched query, and the prepare then parsed the cached statement without
+  its binds; this is fixed in `oracledb` after beta.5. `prepare()` now
+  parses outside the statement cache, so the statement that executes is
+  never changed by it. Present since 0.1.0.
+
 ### Documentation
 
 - **Positional binding is described as it works** -- @hc12r. The Python

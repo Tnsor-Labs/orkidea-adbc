@@ -960,9 +960,16 @@ impl Statement for OracleStatement {
     fn prepare(&mut self) -> Result<()> {
         let sql = self.sql()?;
         let conn = self.state.lock()?;
+        // Parsed outside the statement cache: oracledb 26.0.0-beta.5 closes
+        // a query's cursor once it is fetched to the end, and a parse of the
+        // cached statement then leaves it with a cursor but no binds, so its
+        // next execution fails with ORA-01008 (fixed upstream after beta.5).
+        // Keeping prepare out of the cache also leaves the statement that
+        // executes untouched.
         let mut stmt = conn
             .statement(&sql)
             .map_err(from_oracle)?
+            .exclude_from_cache()
             .build()
             .map_err(from_oracle)?;
         // Oracle executes DDL when it is parsed, so only queries and DML are

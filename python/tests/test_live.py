@@ -59,6 +59,15 @@ def test_dict_parameters_bind_every_use_of_a_name(conn):
         assert cur.fetchone()[0] == 30
 
 
+def test_two_cursors_run_the_same_query_with_parameters(conn):
+    # Each cursor prepares the query. The second prepare used to leave the
+    # statement the first had run without binds (ORA-01008).
+    for params in ({"n": 21}, {"n": 21}, (21,)):
+        with conn.cursor() as cur:
+            cur.execute("SELECT CAST(:n * 2 AS NUMBER(9)) FROM dual", params)
+            assert cur.fetchone()[0] == 42
+
+
 def test_sequence_parameters_bind_by_position(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT :a - :b FROM dual", (10, 2))
