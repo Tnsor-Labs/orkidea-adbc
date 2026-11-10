@@ -35,8 +35,9 @@ inherits = "release"
 debug = "line-tables-only"
 
 # oracledb 26.0.0-beta.5 with two fixes: oracle/rust-oracledb#80 (wide rows
-# of already-parsed statements are misparsed), and tnsnames.ora aliases
-# written after a comment line not being found. The fork's branch is that
-# release plus those two commits. Remove once a release includes both.
+# of already-parsed statements are misparsed), and #83 (tnsnames.ora aliases
+# written after a comment line are not found). The fork's branch is that
+# release plus those two commits, and one marking the files they change.
+# Remove once a release includes both.
 [patch.crates-io]
-oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "16415b2a942b248249598566871c485620102707" }
+oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "e7848e52031839c547ec086be7541f8e62b1c637" }
