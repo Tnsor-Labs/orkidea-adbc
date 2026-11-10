@@ -39,11 +39,11 @@ token is stored in the repository:
 Then tag and push:
 
 ```bash
-git tag -s v0.2.1 -m "Orkidea ADBC 0.2.1"
-git push origin v0.2.1
+git tag -s v0.3.0 -m "Orkidea ADBC 0.3.0"
+git push origin v0.3.0
 ```
 
-Tags with a suffix (`v0.2.1-rc1`) are published as pre-releases.
+Tags with a suffix (`v0.3.0-rc1`) are published as pre-releases.
 
 ## Release notes
 
@@ -100,7 +100,7 @@ proposes updates to both.
   `macosx_11_0_x86_64`, `macosx_11_0_arm64`, `win_amd64`, `win_arm64`). It
   bundles the same library and license files as the archive, and works with
   any Python 3.10 or newer. Pre-release versions follow PEP 440
-  (`0.2.1-rc1` becomes `0.2.1rc1`).
+  (`0.3.0-rc1` becomes `0.3.0rc1`).
 - `install.sh`, `install.ps1`: installers that verify and register the driver.
 - `SHA256SUMS`, `SHA256SUMS.sigstore.json`: checksums of every asset, and
   their signature.
@@ -116,7 +116,7 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
-gh attestation verify orkidea-adbc-0.2.1-linux_amd64.tar.gz --repo Tnsor-Labs/orkidea-adbc
+gh attestation verify orkidea-adbc-0.3.0-linux_amd64.tar.gz --repo Tnsor-Labs/orkidea-adbc
 ```
 
 `install.sh` and `install.ps1` always verify the checksum. They also verify
@@ -127,7 +127,7 @@ the signature when `cosign` is installed.
 ```bash
 cargo build --locked --profile dist -p orkidea-adbc-ffi --target x86_64-unknown-linux-gnu
 python3 scripts/package_release.py --target x86_64-unknown-linux-gnu \
-  --platform linux_amd64 --version 0.2.1 --out dist
+  --platform linux_amd64 --version 0.3.0 --out dist
 ```
 
 A library built directly on a recent distribution needs that
@@ -138,9 +138,9 @@ build backend, `python/build_backend.py`, which needs only the standard
 library):
 
 ```bash
-tar -xzf dist/orkidea-adbc-0.2.1-linux_amd64.tar.gz -C dist
-ORKIDEA_ADBC_LIBRARY=$PWD/dist/orkidea-adbc-0.2.1-linux_amd64/lib/libadbc_driver_orkidea.so \
-ORKIDEA_ADBC_THIRD_PARTY_LICENSES=$PWD/dist/orkidea-adbc-0.2.1-linux_amd64/THIRD_PARTY_LICENSES \
+tar -xzf dist/orkidea-adbc-0.3.0-linux_amd64.tar.gz -C dist
+ORKIDEA_ADBC_LIBRARY=$PWD/dist/orkidea-adbc-0.3.0-linux_amd64/lib/libadbc_driver_orkidea.so \
+ORKIDEA_ADBC_THIRD_PARTY_LICENSES=$PWD/dist/orkidea-adbc-0.3.0-linux_amd64/THIRD_PARTY_LICENSES \
 ORKIDEA_ADBC_PLATFORM=linux_amd64 \
   python3 -m pip wheel --no-deps --wheel-dir dist ./python
 ```

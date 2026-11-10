@@ -13,6 +13,19 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-10
+
+Orkidea 0.3.0 reads results two to three times as fast: values go from the
+network buffer straight into Arrow columns instead of through a row object
+each. It reads the same batches as 0.2.1, which a new test checks type by
+type, and is tested in Rust and Python against Oracle Database 23ai Free.
+
+### Behaviour changes to read before upgrading
+
+None: results, types, batch sizes, and errors are those of 0.2.1. If you
+suspect the new reader, `oracle.columnar_fetch = false` reads results as
+0.2.1 did.
+
 ### Queries and types
 
 - **Results are decoded straight into Arrow columns** -- @hc12r. Query
@@ -285,7 +298,8 @@ still change between minor releases; each change will be listed here.
 - pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
   a pyarrow built from source. The low-level API works without it.
 
-[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Tnsor-Labs/orkidea-adbc/releases/tag/v0.1.0
