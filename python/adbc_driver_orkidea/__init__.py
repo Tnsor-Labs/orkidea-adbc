@@ -117,6 +117,9 @@ class DatabaseOptions(enum.Enum):
     UNCONSTRAINED_NUMBER = "oracle.unconstrained_number"
     #: Scale used when unconstrained ``NUMBER`` is read as ``decimal``.
     UNCONSTRAINED_NUMBER_SCALE = "oracle.unconstrained_number_scale"
+    #: ``"true"`` (default) decodes results straight into Arrow columns;
+    #: ``"false"`` builds each row first.
+    COLUMNAR_FETCH = "oracle.columnar_fetch"
 
 
 class ConnectionOptions(enum.Enum):

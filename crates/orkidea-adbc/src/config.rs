@@ -16,7 +16,7 @@ use std::time::Duration;
 use adbc_core::error::Status;
 use adbc_core::options::OptionValue;
 
-use crate::error::{error, expect_int, expect_string, from_oracle, Result};
+use crate::error::{error, expect_bool, expect_int, expect_string, from_oracle, Result};
 use crate::types::{TypeOptions, UnconstrainedNumber};
 
 /// Validates `oracle.unconstrained_number_scale` (0..=38, the Decimal128 limit).
@@ -59,6 +59,7 @@ pub(crate) const OPT_CLIENT_INFO: &str = "oracle.client_info";
 pub(crate) const OPT_DBOP: &str = "oracle.dbop";
 pub(crate) const OPT_UNCONSTRAINED_NUMBER: &str = "oracle.unconstrained_number";
 pub(crate) const OPT_UNCONSTRAINED_NUMBER_SCALE: &str = "oracle.unconstrained_number_scale";
+pub(crate) const OPT_COLUMNAR_FETCH: &str = "oracle.columnar_fetch";
 
 const KNOWN_OPTIONS: &[&str] = &[
     OPT_URI,
@@ -80,6 +81,7 @@ const KNOWN_OPTIONS: &[&str] = &[
     OPT_PREFETCH_ROWS,
     OPT_UNCONSTRAINED_NUMBER,
     OPT_UNCONSTRAINED_NUMBER_SCALE,
+    OPT_COLUMNAR_FETCH,
     OPT_AUTH_MODE,
     OPT_NEW_PASSWORD,
     OPT_EDITION,
@@ -211,6 +213,9 @@ impl DbOptions {
             OPT_UNCONSTRAINED_NUMBER_SCALE => {
                 validate_number_scale(expect_int(&value, key)?)?;
             }
+            OPT_COLUMNAR_FETCH => {
+                expect_bool(&value, key)?;
+            }
             _ => {
                 expect_string(&value, key)?;
             }
@@ -229,6 +234,14 @@ impl DbOptions {
             options.unconstrained_number_scale = validate_number_scale(scale)?;
         }
         Ok(options)
+    }
+
+    /// Whether query results are fetched column by column (default true).
+    pub(crate) fn columnar_fetch(&self) -> Result<bool> {
+        match self.values.get(OPT_COLUMNAR_FETCH) {
+            Some(v) => expect_bool(v, OPT_COLUMNAR_FETCH),
+            None => Ok(true),
+        }
     }
 
     pub(crate) fn get(&self, key: &str) -> Option<&OptionValue> {

@@ -13,6 +13,21 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Queries and types
+
+- **Results are decoded straight into Arrow columns** -- @hc12r. Query
+  values were decoded into a row object each, then converted one by one,
+  integers and decimals through their text. They are now decoded from the
+  network buffer into column buffers, and `NUMBER` into integers and
+  decimals from its bytes. Reading the lab's million-row, seven-column
+  `ORDERS` table takes 1.2 s instead of 2.9 s, and 0.7 s of CPU instead of
+  2.3 s. This covers numbers, text, `RAW`, `BOOLEAN`, binary floats, dates,
+  timestamps, and LOBs; a query with any other column is read as before.
+  Results are the same: a test reads every covered type both ways and
+  compares the batches. `oracle.columnar_fetch = false` turns it off. It
+  needs `oracledb`'s row sinks (`Cursor::fetch_into`), in the Tnsor Labs
+  fork until an Oracle release has them.
+
 ## [0.2.1] - 2026-11-10
 
 Orkidea 0.2.1 fixes one bug: a second DB-API cursor running a query with

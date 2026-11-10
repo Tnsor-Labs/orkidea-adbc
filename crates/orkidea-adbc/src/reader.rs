@@ -36,6 +36,7 @@ use oracledb::{
     Vector, VectorData,
 };
 
+use crate::columnar::Columns;
 use crate::convert;
 use crate::error::{error, from_oracle, Result};
 use crate::types::{ColumnPlan, Reader, VectorElement, VectorKind};
@@ -365,14 +366,26 @@ fn with_column(err: adbc_core::error::Error, column: &str) -> adbc_core::error::
 
 /// A stream of result rows: a query cursor, a REF CURSOR returned by PL/SQL,
 /// or rows already returned by an execution (OUT binds, DML RETURNING).
-pub(crate) type Rows = Box<dyn Iterator<Item = std::result::Result<Row, oracledb::Error>> + Send>;
+pub(crate) enum Rows {
+    Cursor(Box<Cursor>),
+    Fetched(std::vec::IntoIter<Row>),
+}
+
+impl Rows {
+    fn next(&mut self) -> Option<std::result::Result<Row, oracledb::Error>> {
+        match self {
+            Self::Cursor(cursor) => cursor.next(),
+            Self::Fetched(rows) => rows.next().map(Ok),
+        }
+    }
+}
 
 pub(crate) fn cursor_rows(cursor: Cursor) -> Rows {
-    Box::new(cursor)
+    Rows::Cursor(Box::new(cursor))
 }
 
 pub(crate) fn fetched_rows(rows: Vec<Row>) -> Rows {
-    Box::new(rows.into_iter().map(Ok))
+    Rows::Fetched(rows.into_iter())
 }
 
 /// Supplies further row streams once the current one is exhausted: one per
@@ -396,6 +409,10 @@ pub(crate) struct OracleBatchReader {
     schema: SchemaRef,
     plans: Vec<ColumnPlan>,
     builders: Vec<ColumnBuilder>,
+    /// Columnar fetching (see [`crate::columnar`]), when every column can be
+    /// read that way and the first rows come from a query cursor; the
+    /// builders are unused then.
+    columns: Option<Columns>,
     batch_size: usize,
     rows: Option<Rows>,
     source: Box<dyn RowSource>,
@@ -409,16 +426,28 @@ impl OracleBatchReader {
         first: Option<Rows>,
         source: Box<dyn RowSource>,
         batch_size: usize,
+        columnar: bool,
     ) -> Result<Self> {
         let batch_size = batch_size.max(1);
-        let builders = plans
-            .iter()
-            .map(|p| ColumnBuilder::new(&p.reader, batch_size))
-            .collect::<Result<Vec<_>>>()?;
+        let columns = match &first {
+            Some(Rows::Cursor(cursor)) if columnar => {
+                Columns::for_plans(&plans, cursor.columns(), batch_size)
+            }
+            _ => None,
+        };
+        let builders = if columns.is_some() {
+            Vec::new()
+        } else {
+            plans
+                .iter()
+                .map(|p| ColumnBuilder::new(&p.reader, batch_size))
+                .collect::<Result<Vec<_>>>()?
+        };
         Ok(Self {
             schema,
             plans,
             builders,
+            columns,
             batch_size,
             finished: first.is_none(),
             rows: first,
@@ -428,7 +457,7 @@ impl OracleBatchReader {
 
     /// A reader with no rows.
     pub(crate) fn empty(schema: SchemaRef, plans: Vec<ColumnPlan>) -> Result<Self> {
-        Self::new(schema, plans, None, Box::new(NoMoreRows), 1)
+        Self::new(schema, plans, None, Box::new(NoMoreRows), 1, false)
     }
 
     fn next_row(&mut self) -> Result<Option<Row>> {
@@ -443,7 +472,44 @@ impl OracleBatchReader {
         }
     }
 
+    /// Fills [`Columns`] to a batch, then takes the batch from them. A fetch
+    /// can add more rows than the batch needs; they stay for the next one.
+    fn fill_columnar_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let Some(columns) = self.columns.as_mut() else {
+            return Ok(None);
+        };
+        while columns.len() < self.batch_size {
+            let added = match self.rows.as_mut() {
+                None => break,
+                Some(Rows::Cursor(cursor)) => columns.fetch(cursor)?,
+                Some(rows @ Rows::Fetched(_)) => match rows.next() {
+                    Some(row) => {
+                        columns.push_row(&row.map_err(from_oracle)?)?;
+                        1
+                    }
+                    None => 0,
+                },
+            };
+            if added == 0 {
+                self.rows = self.source.next_rows()?;
+            }
+        }
+        let rows = columns.len().min(self.batch_size);
+        if rows == 0 {
+            self.finished = true;
+            return Ok(None);
+        }
+        let arrays = columns.take_batch(rows, &self.plans)?;
+        let options = RecordBatchOptions::new().with_row_count(Some(rows));
+        RecordBatch::try_new_with_options(self.schema.clone(), arrays, &options)
+            .map(Some)
+            .map_err(|e| error(e.to_string(), Status::Internal))
+    }
+
     fn fill_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.columns.is_some() {
+            return self.fill_columnar_batch();
+        }
         let mut rows = 0;
         while rows < self.batch_size {
             let Some(row) = self.next_row()? else {

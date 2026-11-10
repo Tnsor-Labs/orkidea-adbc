@@ -69,7 +69,9 @@ and fetch options (`oracle.unconstrained_number`, `oracle.batch_size`,
 `oracle.fetch_array_size`, `oracle.prefetch_rows`). Every partition therefore
 produces the schema that `execute_partitions` reported, whichever connection
 reads it. Descriptors contain no credentials, but they do contain the SQL
-text, so handle them like the query itself.
+text, so handle them like the query itself. Whether a partition is read
+column by column (`oracle.columnar_fetch`) is the reading connection's
+setting.
 
 ## Example (Python)
 

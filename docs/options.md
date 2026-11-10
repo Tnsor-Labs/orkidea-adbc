@@ -51,6 +51,19 @@ database operation). Set them on the database to apply them to every
 connection, or on a connection to change them at any time. The new value is
 sent with the next round trip, and `get_option` returns the current value.
 
+### Reading results
+
+| Option | Description |
+| --- | --- |
+| `oracle.columnar_fetch` | `true` (default) decodes query results from the network buffer straight into Arrow columns. `false` builds each row first, as before 0.3.0; set it to rule this out if you suspect a problem in it. |
+
+Columnar fetching takes the columns of the common types: numbers, text,
+`RAW`, `BOOLEAN`, `BINARY_FLOAT` and `BINARY_DOUBLE`, `DATE` and timestamps,
+and LOBs (which are fetched inline). A query with any other column, such as
+an interval, `JSON`, `VECTOR`, `ROWID`, or an object, is read row by row.
+Both give the same batches. Reading a wide table is two to three times as
+fast this way, and takes a third of the CPU.
+
 ### Defaults for statements
 
 `oracle.batch_size`, `oracle.fetch_array_size`, `oracle.prefetch_rows`,

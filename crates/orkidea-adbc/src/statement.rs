@@ -195,6 +195,8 @@ pub struct OracleStatement {
     pub(crate) target_schema: Option<String>,
     pub(crate) temporary: bool,
     pub(crate) batch_size: usize,
+    /// Whether results are fetched column by column (`oracle.columnar_fetch`).
+    pub(crate) columnar_fetch: bool,
     pub(crate) tuning: FetchTuning,
     pub(crate) type_options: TypeOptions,
     pub(crate) partition_count: u32,
@@ -224,6 +226,7 @@ impl OracleStatement {
             prefetch_rows: positive_u32(defaults, OPT_PREFETCH_ROWS, true),
         };
         let type_options = defaults.type_options()?;
+        let columnar_fetch = defaults.columnar_fetch()?;
         Ok(Self {
             state,
             sql: None,
@@ -237,6 +240,7 @@ impl OracleStatement {
             target_schema: None,
             temporary: false,
             batch_size,
+            columnar_fetch,
             tuning,
             type_options,
             partition_count: 1,
@@ -435,6 +439,7 @@ impl OracleStatement {
             first.map(cursor_rows),
             source,
             self.batch_size,
+            self.columnar_fetch,
         )?))
     }
 
@@ -528,6 +533,7 @@ impl OracleStatement {
                 Some(cursor_rows(first)),
                 Box::new(QueuedRows(rest)),
                 self.batch_size,
+                self.columnar_fetch,
             )?));
         }
         let columns = out_rows
@@ -551,6 +557,7 @@ impl OracleStatement {
             Some(fetched_rows(out_rows)),
             Box::new(NoMoreRows),
             self.batch_size,
+            self.columnar_fetch,
         )?))
     }
 

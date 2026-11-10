@@ -23,6 +23,7 @@
 //! Go, R, and any other ADBC client.
 
 mod catalog;
+mod columnar;
 mod config;
 mod connection;
 mod convert;

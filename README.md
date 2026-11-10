@@ -37,7 +37,9 @@ platform (Linux, macOS, and Windows, on x86_64 and arm64) without a database.
 ## Implemented ADBC Surface
 
 - Streaming query execution: results arrive as bounded Arrow record batches
-  (`oracle.batch_size`, default 8192 rows) instead of being loaded into memory
+  (`oracle.batch_size`, default 8192 rows) instead of being loaded into memory,
+  decoded from the network buffer straight into Arrow columns
+  ([`oracle.columnar_fetch`](docs/options.md#reading-results))
 - Exact type mapping for every common Oracle type, including `NUMBER` as
   integers or decimals, `TIMESTAMP WITH TIME ZONE` as UTC instants, intervals,
   `JSON`, `VECTOR`, and `BOOLEAN`. See [docs/type-support.md](docs/type-support.md)

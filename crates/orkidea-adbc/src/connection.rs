@@ -363,6 +363,7 @@ impl Connection for OracleConnection {
             Some(cursor_rows(cursor)),
             Box::new(NoMoreRows),
             partition.batch_size as usize,
+            self.state.defaults.columnar_fetch()?,
         )?))
     }
 }

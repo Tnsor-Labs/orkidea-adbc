@@ -34,10 +34,11 @@ strip = false
 inherits = "release"
 debug = "line-tables-only"
 
-# oracledb 26.0.0-beta.5 with two fixes: oracle/rust-oracledb#80 (wide rows
-# of already-parsed statements are misparsed), and #83 (tnsnames.ora aliases
-# written after a comment line are not found). The fork's branch is that
-# release plus those two commits, and one marking the files they change.
-# Remove once a release includes both.
+# oracledb 26.0.0-beta.5 with two fixes and one addition: oracle/rust-oracledb#80
+# (wide rows of already-parsed statements are misparsed), #83 (tnsnames.ora
+# aliases written after a comment line are not found), and row sinks
+# (Cursor::fetch_into), which columnar fetching reads with. The fork's
+# arrow-row-sink branch is that release plus those commits, and one marking
+# the files they change. Remove once a release includes all three.
 [patch.crates-io]
-oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "e7848e52031839c547ec086be7541f8e62b1c637" }
+oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "0f147cd6232be5b8a631a1cbcff94b7e0882cc2e" }
