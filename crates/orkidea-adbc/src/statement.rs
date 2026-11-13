@@ -546,7 +546,11 @@ impl OracleStatement {
                 Vec::new(),
             )?));
         }
-        let plans = nullable(plan_columns(&columns, &self.type_options)?);
+        let mut plans = plan_columns(&columns, &self.type_options)?;
+        if let Some(params) = params.as_ref() {
+            crate::types::out_bind_units(&mut plans, &self.placeholders(sql)?.names, params);
+        }
+        let plans = nullable(plans);
         let schema = schema_of(&plans);
         if out_rows.is_empty() {
             return Ok(Box::new(OracleBatchReader::empty(schema, plans)?));

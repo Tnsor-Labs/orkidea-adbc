@@ -184,6 +184,18 @@ fn value_at(field: &Field, array: &dyn Array, row: usize) -> Result<Box<dyn ToDb
             return Ok(Box::new(db_type));
         }
     }
+    // A NULL date or timestamp is bound with its own Oracle type. Bound as a
+    // missing `OracleTimestamp`, it would be a TIMESTAMP WITH TIME ZONE, and
+    // Oracle would convert an OUT value (RETURNING ... INTO) to it through
+    // the session time zone.
+    if is_null {
+        match array.data_type() {
+            DataType::Date32 | DataType::Date64 => return Ok(Box::new(oracledb::DB_TYPE_DATE)),
+            DataType::Timestamp(_, None) => return Ok(Box::new(oracledb::DB_TYPE_TIMESTAMP)),
+            DataType::Timestamp(_, Some(_)) => return Ok(Box::new(oracledb::DB_TYPE_TIMESTAMP_TZ)),
+            _ => {}
+        }
+    }
     macro_rules! prim {
         ($t:ty, $rust:ty) => {{
             let a = array.as_primitive::<$t>();

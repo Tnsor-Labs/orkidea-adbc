@@ -13,6 +13,21 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Behaviour changes to read before upgrading
+
+- **Date and timestamp OUT binds keep their value and their placeholder's
+  type** -- @hc12r. A NULL `Date32`, `Date64`, or zone-less `Timestamp`
+  placeholder was bound as `TIMESTAMP WITH TIME ZONE`, so Oracle converted
+  the value returned into it (`RETURNING ... INTO`, or a PL/SQL OUT
+  parameter) through the session time zone: with the session at `+02:00`,
+  `DATE '2000-01-01'` came back as `1999-12-31 22:00:00 UTC`. Such
+  placeholders are now bound as `DATE`, `TIMESTAMP`, or `TIMESTAMP WITH TIME
+  ZONE` by their Arrow type, and a timestamp OUT bind is read in its
+  placeholder's unit and zone, so fractional seconds are kept: the result
+  is `timestamp[us]` `2000-01-01 00:00:00` for a `timestamp[us]`
+  placeholder, where it was `timestamp[s, tz=UTC]`. Sessions in UTC, such
+  as the CI's, saw only the type change.
+
 ## [0.4.0] - 2026-11-13
 
 Orkidea 0.4.0 is built on `oracledb` 26.0.0-beta.6 and Arrow 60. Every

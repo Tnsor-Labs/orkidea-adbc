@@ -381,6 +381,34 @@ pub(crate) fn plan_column(col: &Metadata, options: &TypeOptions) -> Result<Colum
 }
 
 /// Plans every column of a result set.
+/// Gives each timestamp OUT bind the unit of its placeholder's Arrow type. A
+/// bind variable declares no fractional-second precision, so it would be read
+/// in whole seconds.
+pub(crate) fn out_bind_units(
+    plans: &mut [ColumnPlan],
+    names: &[String],
+    params: &arrow_array::RecordBatch,
+) {
+    for plan in plans {
+        if !matches!(plan.reader, Reader::Timestamp(_)) {
+            continue;
+        }
+        let Some(index) = names.iter().position(|name| name == plan.field.name()) else {
+            continue;
+        };
+        let DataType::Timestamp(unit, _) = params.schema().field(index).data_type().clone() else {
+            continue;
+        };
+        if let DataType::Timestamp(_, tz) = plan.field.data_type().clone() {
+            plan.reader = Reader::Timestamp(unit);
+            plan.field = plan
+                .field
+                .clone()
+                .with_data_type(DataType::Timestamp(unit, tz));
+        }
+    }
+}
+
 pub(crate) fn plan_columns(columns: &[Metadata], options: &TypeOptions) -> Result<Vec<ColumnPlan>> {
     columns.iter().map(|c| plan_column(c, options)).collect()
 }

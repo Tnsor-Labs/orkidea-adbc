@@ -10,12 +10,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use adbc_core::options::OptionConnection;
-use adbc_core::{Connection, Optionable, Statement};
+use adbc_core::{Connection, Database, Optionable, Statement};
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, Int32Type};
+use arrow_array::types::{Float64Type, Int32Type, TimestampMicrosecondType};
 use arrow_array::{
     Array, ArrayRef, FixedSizeListArray, Float32Array, Int64Array, NullArray, RecordBatch,
-    StringArray,
+    StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use orkidea_adbc::{OracleConnection, ORACLE_BIND_TYPE_KEY};
@@ -191,6 +191,90 @@ fn dml_returning_returns_rows() {
         &format!("SELECT CAST(COUNT(*) AS NUMBER(5)) AS c FROM {table}"),
     );
     assert_eq!(row.column(0).as_primitive::<Int32Type>().value(0), 2);
+    drop_table(&mut conn, table);
+}
+
+#[test]
+fn returning_dates_and_timestamps_ignores_the_session_time_zone() {
+    // A NULL timestamp placeholder is an OUT bind of its own type: DATE and
+    // TIMESTAMP values come back as stored, not converted through the
+    // session time zone, which is not UTC here.
+    let Some(mut db) = database() else { return };
+    db.set_option(
+        adbc_core::options::OptionDatabase::Other("oracle.time_zone".into()),
+        "+05:00".into(),
+    )
+    .unwrap();
+    let mut conn = db.new_connection().unwrap();
+    let table = "ORKIDEA_P_RETURNING_TS";
+    drop_table(&mut conn, table);
+    exec(
+        &mut conn,
+        &format!(
+            "CREATE TABLE {table} (id NUMBER(10), d DATE DEFAULT DATE '2000-01-01', \
+             ts TIMESTAMP(6) DEFAULT TIMESTAMP '2000-01-01 12:30:00.25', \
+             tz TIMESTAMP(6) WITH TIME ZONE DEFAULT TIMESTAMP '2000-01-01 12:30:00 +02:00')"
+        ),
+    );
+    let timestamp = |tz: Option<&str>| {
+        Arc::new(TimestampMicrosecondArray::from(vec![None::<i64>]).with_timezone_opt(tz))
+            as ArrayRef
+    };
+    let microseconds = |t: arrow_schema::DataType| Field::new("out", t, true);
+    let params = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            microseconds(DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                None,
+            )),
+            microseconds(DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                None,
+            )),
+            microseconds(DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                Some("UTC".into()),
+            )),
+        ])),
+        vec![
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            timestamp(None),
+            timestamp(None),
+            timestamp(Some("UTC")),
+        ],
+    )
+    .unwrap();
+    let batches = run(
+        &mut conn,
+        &format!("INSERT INTO {table} (id) VALUES (:1) RETURNING d, ts, tz INTO :2, :3, :4"),
+        Some(params),
+    );
+    let batch = &batches[0];
+    // 2000-01-01 00:00:00 and 12:30:00.25, as stored, in each placeholder's
+    // unit.
+    assert_eq!(
+        batch
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        946_684_800_000_000
+    );
+    assert_eq!(
+        batch
+            .column(1)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        946_729_800_250_000
+    );
+    // 12:30 at +02:00 is 10:30 UTC.
+    assert_eq!(
+        batch
+            .column(2)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        946_722_600_000_000
+    );
     drop_table(&mut conn, table);
 }
 
