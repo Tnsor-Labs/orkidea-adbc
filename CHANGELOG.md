@@ -19,13 +19,34 @@ pushed (see [docs/release.md](docs/release.md)).
   `arrow-schema` 60 (was 59), so a Rust program that passes Arrow data to it
   needs Arrow 60 too. The C driver and the Python package are unaffected:
   they exchange data through the Arrow C data interface.
+- **`TIMESTAMP WITH LOCAL TIME ZONE` is read as a UTC instant** -- @hc12r.
+  Its Arrow type is `Timestamp(unit, "UTC")`, as for `TIMESTAMP WITH TIME
+  ZONE`, instead of a zone-less timestamp, and its values are UTC. Before,
+  they were the database time zone's wall-clock time, so where `DBTIMEZONE`
+  is `+00:00` only the type changes. A database whose time zone is a region
+  name (`Europe/Paris`) rather than an offset cannot be read this way yet:
+  such a query fails with an error that says so. This follows `oracledb`
+  26.0.0-beta.6, and the docs no longer say that `oracle.time_zone` decides
+  how these values are read; it still applies to SQL such as
+  `CURRENT_TIMESTAMP`.
 
 ### Packaging
 
-- **Built on `oracledb`'s main branch** -- @hc12r. `oracledb` 26.0.0-beta.6,
-  not yet released, fixes wide rows of an already-parsed statement (#80) in
-  its own way, so the fork now carries only the `tnsnames.ora` fix (#83) and
-  row sinks (#85) on top of it. It also brings Arrow 60.
+- **Built on `oracledb` 26.0.0-beta.6** -- @hc12r. The release brings Arrow
+  60 and fixes for bugs the driver had worked around or reported: wide rows
+  of an already-parsed statement (oracle/rust-oracledb#80), binds after a
+  `VECTOR` or `JSON` bind (#79), `tnsnames.ora` aliases after a comment
+  (#83), vector dimensions (#78), a call timeout that did not cover sends
+  (#77), and TLS connections when several crypto providers are built in
+  (#34). The Tnsor Labs fork now adds only row sinks (#85) and an OSON
+  visitor on top of it.
+
+### Errors
+
+- **Error messages name their cause again** -- @hc12r. `oracledb` 26.0.0-beta.6
+  no longer puts an error's cause in its message, so a refused connection
+  read only "stream operation failed". The driver now adds the causes, such
+  as "Connection refused (os error 111)".
 
 ### Queries and types
 

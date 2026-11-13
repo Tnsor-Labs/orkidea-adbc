@@ -354,10 +354,11 @@ fn data_type_for(reader: &Reader, db_type: &oracledb::DbType) -> DataType {
         Reader::Binary => DataType::Binary,
         Reader::LargeBinary => DataType::LargeBinary,
         Reader::Timestamp(unit) => {
-            // TIMESTAMP WITH TIME ZONE values arrive normalised to UTC.
-            // TIMESTAMP WITH LOCAL TIME ZONE values arrive as wall-clock
-            // time in the session time zone, so they stay zone-less.
-            let tz = (db_type == oracledb::DB_TYPE_TIMESTAMP_TZ).then(|| "UTC".into());
+            // TIMESTAMP WITH TIME ZONE and WITH LOCAL TIME ZONE values are
+            // instants, which oracledb gives in UTC.
+            let tz = (db_type == oracledb::DB_TYPE_TIMESTAMP_TZ
+                || db_type == oracledb::DB_TYPE_TIMESTAMP_LTZ)
+                .then(|| "UTC".into());
             DataType::Timestamp(*unit, tz)
         }
         Reader::IntervalDayToSecond(unit) => DataType::Duration(*unit),

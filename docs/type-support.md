@@ -29,7 +29,7 @@ schema that `execute` produces.
 | `DATE` | `Timestamp(s)` | Oracle `DATE` has a time-of-day component |
 | `TIMESTAMP(f)` | `Timestamp(unit)` | f = 0 → s, 1–3 → ms, 4–6 → µs, 7–9 → ns |
 | `TIMESTAMP(f) WITH TIME ZONE` | `Timestamp(unit, "UTC")` | The UTC instant; the original offset is not preserved |
-| `TIMESTAMP(f) WITH LOCAL TIME ZONE` | `Timestamp(unit)` | Wall-clock time in the session time zone |
+| `TIMESTAMP(f) WITH LOCAL TIME ZONE` | `Timestamp(unit, "UTC")` | The instant, in UTC; needs a database time zone set as an offset (`DBTIMEZONE` such as `+00:00`), not a region name |
 | `INTERVAL DAY TO SECOND` | `Duration(unit)` | Unit from the fractional-second precision |
 | `INTERVAL YEAR TO MONTH` | `Interval(YearMonth)` | |
 | `JSON` (21c+) | `Utf8` with the `arrow.json` extension | Object keys are emitted in sorted order |

@@ -68,6 +68,8 @@ const ALL_TYPES: &str = "
         DATE '2025-01-01' + MOD(level, 40) AS dt,
         TIMESTAMP '2025-01-01 10:00:00.123456' + NUMTODSINTERVAL(level, 'SECOND') AS ts,
         FROM_TZ(TIMESTAMP '2025-01-01 10:00:00', '+02:00') + NUMTODSINTERVAL(level, 'MINUTE') AS tstz,
+        CAST(FROM_TZ(TIMESTAMP '2025-01-01 23:30:00.5', '+02:00') + NUMTODSINTERVAL(level, 'MINUTE')
+            AS TIMESTAMP WITH LOCAL TIME ZONE) AS tsltz,
         MOD(level, 2) = 0 AS flag,
         CASE WHEN MOD(level, 6) = 0 THEN NULL
             ELSE NUMTODSINTERVAL(level * 1.5 - 2000, 'SECOND') END AS ids,

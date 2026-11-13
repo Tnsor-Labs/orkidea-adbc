@@ -264,7 +264,8 @@ fn datetime_and_interval_mapping() {
         &format!(
             "INSERT INTO {table} VALUES (
                 DATE '2025-01-02' + 3/24, {ts}, {ts}, {ts}, {ts},
-                TIMESTAMP '2025-01-02 03:04:05.5 +02:00', {ts},
+                TIMESTAMP '2025-01-02 03:04:05.5 +02:00',
+                TIMESTAMP '2025-01-02 03:04:05.5 +02:00',
                 INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '-2-3' YEAR TO MONTH)"
         ),
     );
@@ -323,9 +324,17 @@ fn datetime_and_interval_mapping() {
             .value(0),
         1_735_779_845_500_000
     );
+    // WITH LOCAL TIME ZONE: the same instant, in UTC, whatever the database
+    // and session time zones are.
     assert_eq!(
         field(&schema, "LTZ").data_type(),
-        &DataType::Timestamp(TimeUnit::Microsecond, None)
+        &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+    );
+    assert_eq!(
+        col("LTZ")
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        1_735_779_845_500_000
     );
     assert_eq!(
         field(&schema, "IDS").data_type(),

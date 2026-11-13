@@ -35,7 +35,7 @@ These options are applied when each connection is opened.
 
 | Option | Description |
 | --- | --- |
-| `oracle.time_zone` | Session time zone, for example `UTC`, `+02:00`, `Europe/Paris` (`ALTER SESSION SET TIME_ZONE`). It determines how `TIMESTAMP WITH LOCAL TIME ZONE` values are presented. |
+| `oracle.time_zone` | Session time zone, for example `UTC`, `+02:00`, `Europe/Paris` (`ALTER SESSION SET TIME_ZONE`). It applies to SQL that depends on the session time zone, such as `CURRENT_TIMESTAMP` and conversions to `TIMESTAMP WITH LOCAL TIME ZONE`; fetched `TIMESTAMP WITH LOCAL TIME ZONE` values are UTC instants whatever it is. |
 | `oracle.edition` | Edition for edition-based redefinition (`ALTER SESSION SET EDITION`). |
 | `oracle.program`, `oracle.machine`, `oracle.terminal` | Client identity recorded in `V$SESSION`. |
 

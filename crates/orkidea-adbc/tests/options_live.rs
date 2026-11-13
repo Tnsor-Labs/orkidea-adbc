@@ -137,6 +137,21 @@ fn sysdba_auth_mode_connects_with_dba_privileges() {
 }
 
 #[test]
+fn connection_errors_name_their_cause() {
+    // Nothing listens on port 1: the error gives the operating system's
+    // reason, not only that the connection failed.
+    let mut db = OracleDriver.new_database().unwrap();
+    db.set_option(OptionDatabase::Uri, "oracle://u@127.0.0.1:1/x".into())
+        .unwrap();
+    db.set_option(OptionDatabase::Password, "p".into()).unwrap();
+    let err = db
+        .new_connection()
+        .err()
+        .expect("port 1 refuses connections");
+    assert!(err.message.contains("os error"), "{}", err.message);
+}
+
+#[test]
 fn invalid_auth_mode_is_rejected_at_set_time() {
     let mut db = OracleDriver.new_database().unwrap();
     assert!(db

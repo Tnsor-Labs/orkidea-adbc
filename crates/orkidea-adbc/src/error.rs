@@ -25,11 +25,21 @@ pub(crate) fn error(message: impl Into<String>, status: Status) -> AdbcError {
 /// argument, state, or authentication problem is reported as an internal/IO
 /// error so that clients do not mistake it for a retryable user error.
 ///
-/// Note: the message is the `oracledb` display message. It never contains the
-/// password because `oracledb` stores passwords in a secret wrapper and does
-/// not include credentials in its error messages.
+/// Note: the message is the `oracledb` display message followed by its causes.
+/// It never contains the password because `oracledb` stores passwords in a
+/// secret wrapper and does not include credentials in its error messages.
 pub(crate) fn from_oracle(err: OracleError) -> AdbcError {
     let mut message = err.to_string();
+    // oracledb's message leaves out its cause, such as the I/O error behind a
+    // failed connection, which `source()` returns instead.
+    let mut cause = std::error::Error::source(&err);
+    while let Some(error) = cause {
+        let text = error.to_string();
+        if !text.is_empty() && !message.contains(&text) {
+            message = format!("{message}: {text}");
+        }
+        cause = error.source();
+    }
     if let ErrorKind::UnsupportedDbType(db_type) = err.kind() {
         message = format!(
             "{message}; {}",

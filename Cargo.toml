@@ -34,11 +34,10 @@ strip = false
 inherits = "release"
 debug = "line-tables-only"
 
-# oracledb's main branch as of 3dd6de4 (26.0.0-beta.6, not yet on crates.io)
-# with the fix for oracle/rust-oracledb#83 (tnsnames.ora aliases written after
-# a comment line are not found) and row sinks (#85, Cursor::fetch_into),
-# which columnar fetching reads with. The fork's fork-next branch is that
-# commit plus those two, and one marking the files they change. Remove once
-# a release includes both.
+# oracledb 26.0.0-beta.6 with row sinks (oracle/rust-oracledb#85,
+# Cursor::fetch_into), which columnar fetching reads with, and JSON visitors,
+# which write JSON as text from OSON. The fork's beta6-sink branch is the
+# beta.6 tag plus those and one commit marking the files they change. Remove
+# once a release includes them.
 [patch.crates-io]
-oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "ffeb2ae3843681f465bb8681de61eff59f91f532" }
+oracledb = { git = "https://github.com/Tnsor-Labs/rust-oracledb", rev = "d4939fd3d0268af31784eb2c425d6610e9f9d725" }
