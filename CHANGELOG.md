@@ -13,6 +13,13 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-13
+
+Orkidea 0.4.0 is built on `oracledb` 26.0.0-beta.6 and Arrow 60. Every
+column type is now decoded straight into Arrow columns, and `JSON` reads in
+about half the time. It is tested in Rust and Python against Oracle Database
+23ai Free, with the database time zone at UTC and at `+05:00`.
+
 ### Behaviour changes to read before upgrading
 
 - **Arrow 60** -- @hc12r. The Rust crate's API uses `arrow-array` and
@@ -345,7 +352,8 @@ still change between minor releases; each change will be listed here.
 - pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
   a pyarrow built from source. The low-level API works without it.
 
-[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.1.0...v0.2.0
