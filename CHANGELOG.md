@@ -13,6 +13,15 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-13
+
+Orkidea 0.4.1 fixes one bug: a date or timestamp returned into a NULL
+placeholder, by `RETURNING ... INTO` or a PL/SQL OUT parameter, was shifted
+by the session's offset from UTC and lost its fractional seconds. The DuckDB
+extension's tests found it, run outside UTC; a new test sets the session to
+`+05:00`, so CI, which runs in UTC, covers it. It is tested in Rust and
+Python against Oracle Database 23ai Free.
+
 ### Behaviour changes to read before upgrading
 
 - **Date and timestamp OUT binds keep their value and their placeholder's
@@ -367,7 +376,8 @@ still change between minor releases; each change will be listed here.
 - pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
   a pyarrow built from source. The low-level API works without it.
 
-[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.0...v0.2.1
