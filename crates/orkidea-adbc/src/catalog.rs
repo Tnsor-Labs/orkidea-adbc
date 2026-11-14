@@ -189,14 +189,19 @@ pub(crate) fn statistics_schema() -> SchemaRef {
 // Dictionary access
 // ---------------------------------------------------------------------------
 
+/// Rows a dictionary query fetches per round trip: a schema's columns are
+/// thousands of rows, which oracledb's default of 100 would fetch in as many
+/// round trips as hundreds.
+const DICT_FETCH_ROWS: u32 = 1000;
+
 /// A dictionary query with optional `LIKE` filters appended as binds.
-struct DictQuery {
+pub(crate) struct DictQuery {
     sql: String,
     params: Vec<String>,
 }
 
 impl DictQuery {
-    fn new(sql: impl Into<String>) -> Self {
+    pub(crate) fn new(sql: impl Into<String>) -> Self {
         Self {
             sql: sql.into(),
             params: Vec::new(),
@@ -214,7 +219,7 @@ impl DictQuery {
     }
 
     /// Adds `AND column IN (...)` when values are given.
-    fn one_of(mut self, column: &str, values: Option<&[String]>) -> Self {
+    pub(crate) fn one_of(mut self, column: &str, values: Option<&[String]>) -> Self {
         if let Some(values) = values {
             if values.is_empty() {
                 self.sql.push_str(" AND 1 = 0");
@@ -233,15 +238,27 @@ impl DictQuery {
         self
     }
 
-    fn order_by(mut self, clause: &str) -> Self {
+    pub(crate) fn order_by(mut self, clause: &str) -> Self {
         self.sql.push_str(" ORDER BY ");
         self.sql.push_str(clause);
         self
     }
 
-    fn for_each(&self, conn: &Connection, mut f: impl FnMut(&Row) -> Result<()>) -> Result<()> {
+    pub(crate) fn for_each(
+        &self,
+        conn: &Connection,
+        mut f: impl FnMut(&Row) -> Result<()>,
+    ) -> Result<()> {
         let params: Vec<&dyn ToDbValue> = self.params.iter().map(|p| p as &dyn ToDbValue).collect();
-        let cursor = conn.query(&self.sql, &params).map_err(from_oracle)?;
+        let cursor = conn
+            .statement(&self.sql)
+            .map_err(from_oracle)?
+            .fetch_array_size(DICT_FETCH_ROWS)
+            .prefetch_rows(DICT_FETCH_ROWS)
+            .build()
+            .map_err(from_oracle)?
+            .query(&params)
+            .map_err(from_oracle)?;
         for row in cursor {
             f(&row.map_err(from_oracle)?)?;
         }
@@ -249,15 +266,15 @@ impl DictQuery {
     }
 }
 
-fn text(row: &Row, index: usize) -> Result<Option<String>> {
+pub(crate) fn text(row: &Row, index: usize) -> Result<Option<String>> {
     row.get::<Option<String>>(index).map_err(from_oracle)
 }
 
-fn required(row: &Row, index: usize) -> Result<String> {
+pub(crate) fn required(row: &Row, index: usize) -> Result<String> {
     text(row, index)?.ok_or_else(|| error("unexpected NULL in data dictionary", Status::Internal))
 }
 
-fn int(row: &Row, index: usize) -> Result<Option<i64>> {
+pub(crate) fn int(row: &Row, index: usize) -> Result<Option<i64>> {
     row.get::<Option<i64>>(index).map_err(from_oracle)
 }
 

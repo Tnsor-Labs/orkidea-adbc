@@ -13,6 +13,18 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Catalog metadata
+
+- **`oracle.table_schemas` reads every table's schema in one query** --
+  @hc12r. Set on a statement to a schema name, it makes `execute_schema`
+  give one struct field per table, holding the fields a query of it gives,
+  read from `ALL_TAB_COLS` instead of describing each table. Views are left
+  out, and so are tables with a column the dictionary cannot describe
+  exactly: a `VECTOR`, `XMLTYPE`, or object type, or a virtual column
+  declared with a precision, which a query describes as its expression's
+  type. A test checks, for every table in the test schema, that the fields
+  equal those of `SELECT *`. See [docs/catalog.md](docs/catalog.md#table-schemas-from-the-dictionary).
+
 ## [0.4.1] - 2026-11-13
 
 Orkidea 0.4.1 fixes one bug: a date or timestamp returned into a NULL

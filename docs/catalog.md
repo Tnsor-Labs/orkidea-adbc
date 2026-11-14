@@ -77,6 +77,39 @@ They are estimates as of the last statistics gathering (for example
 Tables without gathered statistics are omitted. Minimum and maximum values are
 not reported: Oracle stores them in an internal encoding.
 
+## Table schemas from the dictionary
+
+`execute_schema` on a statement with `oracle.table_schemas` set to a schema
+name gives the Arrow schema of each of its tables, read from `ALL_TAB_COLS`
+with one query, where describing them takes a query of each. The name is an identifier, as in SQL: `hr` and `HR` name `HR`, and
+`"Hr"` names `Hr`. Setting it replaces any SQL query on the statement, and
+setting a query clears it; such a statement cannot be executed.
+
+The result has one non-nullable struct field per table, named after it,
+whose fields are the table's columns: the same fields, with the same
+types, nullability, and `oracle.type-name`, as `SELECT *` of the table
+gives, under the statement's `oracle.unconstrained_number` options. Left
+out, because the dictionary cannot say how a query describes them:
+
+- tables with a column of a type the driver cannot read, or whose shape is
+  not in the dictionary (`VECTOR`, `XMLTYPE`, object types);
+- tables with a virtual column declared with a precision, such as
+  `total NUMBER(10,2) AS (qty * price)`, which a query describes as the type
+  of its expression (`NUMBER`);
+- views, whose columns are expressions: a view over such a virtual column
+  has `NUMBER(10,2)` in the dictionary, too.
+
+Describe those with a query of each. Like `get_objects`, the result holds
+the tables the user can see, which includes a table on which the user has
+been granted only `INSERT`, `UPDATE`, or `DELETE` and cannot query.
+
+```python
+stmt = conn.adbc_statement
+stmt.set_options(**{"oracle.table_schemas": "HR"})
+schema = stmt.execute_schema()
+schema.field("EMPLOYEES").type  # struct<EMPLOYEE_ID: int32, ...>
+```
+
 ## Performance
 
 Catalog calls are only as fast as Oracle's `ALL_*` dictionary views, which

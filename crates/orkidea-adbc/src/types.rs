@@ -15,7 +15,9 @@
 //! [`plan_column`] decides, for every result column, both the Arrow field the
 //! driver reports and how each value is read. `execute_schema`,
 //! `get_table_schema`, and `execute` all go through it, so the reported
-//! schema always matches the data.
+//! schema always matches the data. It reads a [`ColumnType`], which a query's
+//! describe gives, and so does the data dictionary for the schemas
+//! `oracle.table_schemas` reports (see [`crate::dictionary`]).
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -23,7 +25,7 @@ use std::sync::Arc;
 
 use adbc_core::error::Status;
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit};
-use oracledb::{Metadata, VectorStorageFormat};
+use oracledb::{DbType, Metadata, VectorStorageFormat};
 
 use crate::convert::time_unit_for_scale;
 use crate::error::{error, Result};
@@ -168,6 +170,48 @@ impl VectorKind {
     }
 }
 
+/// What planning reads about a column.
+pub(crate) struct ColumnType<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) db_type: &'static DbType,
+    pub(crate) precision: u8,
+    pub(crate) scale: i8,
+    pub(crate) nullable: bool,
+    /// The type as `Metadata::data_type` names it, such as `NUMBER(10,2)`.
+    pub(crate) type_name: String,
+    /// Set for `VECTOR` columns.
+    pub(crate) vector: Option<VectorShape>,
+}
+
+/// How a `VECTOR` column is declared.
+pub(crate) struct VectorShape {
+    pub(crate) sparse: bool,
+    pub(crate) storage: Option<VectorStorageFormat>,
+    /// Fixed dimension count; `None` for `VECTOR(*,...)`.
+    pub(crate) dimensions: Option<usize>,
+}
+
+impl<'a> ColumnType<'a> {
+    /// The column as a query's describe gives it.
+    pub(crate) fn described(col: &'a Metadata) -> Self {
+        let type_name = col.data_type();
+        let vector = (col.db_type() == oracledb::DB_TYPE_VECTOR).then(|| VectorShape {
+            sparse: col.is_sparse_vector(),
+            storage: col.vector_storage_format(),
+            dimensions: declared_vector_dimensions(&type_name),
+        });
+        Self {
+            name: col.name(),
+            db_type: col.db_type(),
+            precision: col.precision(),
+            scale: col.scale(),
+            nullable: col.nullable(),
+            type_name,
+            vector,
+        }
+    }
+}
+
 /// A planned result column.
 #[derive(Clone, Debug)]
 pub(crate) struct ColumnPlan {
@@ -192,12 +236,11 @@ pub(crate) fn unsupported_type_hint(db_type: &oracledb::DbType) -> &'static str 
     }
 }
 
-fn unsupported(col: &Metadata, hint: &str) -> adbc_core::error::Error {
+fn unsupported(col: &ColumnType<'_>, hint: &str) -> adbc_core::error::Error {
     error(
         format!(
             "Oracle column {:?} has type {}, which Orkidea cannot return as Arrow; {hint}",
-            col.name(),
-            col.data_type()
+            col.name, col.type_name
         ),
         Status::NotImplemented,
     )
@@ -210,9 +253,8 @@ fn unsupported(col: &Metadata, hint: &str) -> adbc_core::error::Error {
 /// flexible-dimension flag the wrong way round (it returns `None` for fixed
 /// dimensions), so the type name is the reliable source. Remove once
 /// <https://github.com/oracle/rust-oracledb/issues/78> is fixed upstream.
-fn declared_vector_dimensions(col: &Metadata) -> Option<usize> {
-    let name = col.data_type();
-    let inner = name.strip_prefix("VECTOR(")?.strip_suffix(')')?;
+fn declared_vector_dimensions(type_name: &str) -> Option<usize> {
+    let inner = type_name.strip_prefix("VECTOR(")?.strip_suffix(')')?;
     let dims = inner.split(',').next()?.trim();
     dims.parse::<usize>().ok().filter(|d| *d > 0)
 }
@@ -228,9 +270,9 @@ fn decimal_reader(precision: u8, scale: i8) -> Reader {
     }
 }
 
-fn number_reader(col: &Metadata, options: &TypeOptions) -> Reader {
-    let precision = col.precision();
-    let scale = col.scale();
+fn number_reader(col: &ColumnType<'_>, options: &TypeOptions) -> Reader {
+    let precision = col.precision;
+    let scale = col.scale;
     if scale == FLOATING_SCALE || precision == 0 {
         // Unconstrained NUMBER, FLOAT(b), or a computed expression.
         return match options.unconstrained_number {
@@ -260,22 +302,22 @@ fn number_reader(col: &Metadata, options: &TypeOptions) -> Reader {
     }
 }
 
-fn vector_reader(col: &Metadata) -> Result<Reader> {
-    if col.is_sparse_vector() {
+fn vector_reader(col: &ColumnType<'_>, shape: &VectorShape) -> Result<Reader> {
+    if shape.sparse {
         return Err(unsupported(
             col,
             "sparse vectors are not supported yet; convert with FROM_VECTOR(col RETURNING CLOB) \
              or TO_VECTOR(col, *, *, DENSE)",
         ));
     }
-    let element = match col.vector_storage_format() {
+    let element = match &shape.storage {
         Some(VectorStorageFormat::Float32) => VectorElement::Float32,
         Some(VectorStorageFormat::Int8) => VectorElement::Int8,
         Some(VectorStorageFormat::Binary) => VectorElement::Binary,
         // Float64 and flexible (*) storage are read as Float64.
         Some(VectorStorageFormat::Float64) | None => VectorElement::Float64,
     };
-    let dimensions = match (col.vector_storage_format(), declared_vector_dimensions(col)) {
+    let dimensions = match (&shape.storage, shape.dimensions) {
         (_, None) => None,
         (Some(VectorStorageFormat::Binary), Some(dims)) => i32::try_from(dims / 8).ok(),
         (_, Some(dims)) => i32::try_from(dims).ok(),
@@ -286,9 +328,9 @@ fn vector_reader(col: &Metadata) -> Result<Reader> {
     }))
 }
 
-fn reader_for(col: &Metadata, options: &TypeOptions) -> Result<Reader> {
+fn reader_for(col: &ColumnType<'_>, options: &TypeOptions) -> Result<Reader> {
     use oracledb::*;
-    let db_type = col.db_type();
+    let db_type = col.db_type;
     let reader = if db_type == DB_TYPE_NUMBER {
         number_reader(col, options)
     } else if db_type == DB_TYPE_BINARY_INTEGER {
@@ -323,15 +365,15 @@ fn reader_for(col: &Metadata, options: &TypeOptions) -> Result<Reader> {
         || db_type == DB_TYPE_TIMESTAMP_TZ
         || db_type == DB_TYPE_TIMESTAMP_LTZ
     {
-        Reader::Timestamp(time_unit_for_scale(col.scale()))
+        Reader::Timestamp(time_unit_for_scale(col.scale))
     } else if db_type == DB_TYPE_INTERVAL_DS {
-        Reader::IntervalDayToSecond(time_unit_for_scale(col.scale()))
+        Reader::IntervalDayToSecond(time_unit_for_scale(col.scale))
     } else if db_type == DB_TYPE_INTERVAL_YM {
         Reader::IntervalYearToMonth
     } else if db_type == DB_TYPE_JSON {
         Reader::Json
-    } else if db_type == DB_TYPE_VECTOR {
-        vector_reader(col)?
+    } else if let Some(shape) = &col.vector {
+        vector_reader(col, shape)?
     } else {
         return Err(unsupported(col, unsupported_type_hint(db_type)));
     };
@@ -369,14 +411,19 @@ fn data_type_for(reader: &Reader, db_type: &oracledb::DbType) -> DataType {
 
 /// Plans one result column.
 pub(crate) fn plan_column(col: &Metadata, options: &TypeOptions) -> Result<ColumnPlan> {
-    let reader = reader_for(col, options)?;
-    let data_type = data_type_for(&reader, col.db_type());
-    let mut metadata = HashMap::from([(ORACLE_TYPE_NAME_KEY.to_string(), col.data_type())]);
+    plan_type(ColumnType::described(col), options)
+}
+
+/// Plans a column from what is known of its type.
+pub(crate) fn plan_type(col: ColumnType<'_>, options: &TypeOptions) -> Result<ColumnPlan> {
+    let reader = reader_for(&col, options)?;
+    let data_type = data_type_for(&reader, col.db_type);
+    let mut metadata = HashMap::from([(ORACLE_TYPE_NAME_KEY.to_string(), col.type_name)]);
     if reader == Reader::Json {
         metadata.insert("ARROW:extension:name".to_string(), "arrow.json".to_string());
         metadata.insert("ARROW:extension:metadata".to_string(), String::new());
     }
-    let field = Field::new(col.name(), data_type, col.nullable()).with_metadata(metadata);
+    let field = Field::new(col.name, data_type, col.nullable).with_metadata(metadata);
     Ok(ColumnPlan { field, reader })
 }
 

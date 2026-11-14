@@ -40,6 +40,9 @@ pub(crate) const DEFAULT_BATCH_SIZE: usize = 8192;
 pub(crate) const OPT_PARTITION_COUNT: &str = "oracle.partition.count";
 pub(crate) const OPT_PARTITION_COLUMN: &str = "oracle.partition.column";
 pub(crate) const OPT_PARTITION_CONSISTENT: &str = "oracle.partition.consistent";
+/// A schema (owner) whose tables' schemas `execute_schema` gives, read from
+/// the data dictionary (see [`crate::dictionary`]).
+pub(crate) const OPT_TABLE_SCHEMAS: &str = "oracle.table_schemas";
 /// ADBC 1.1 option: bind parameters by field name (`true`) or by position
 /// (`false`). The ADBC Python DB-API sets it for dict parameters.
 pub(crate) const OPT_BIND_BY_NAME: &str = "adbc.statement.bind_by_name";
@@ -202,6 +205,8 @@ pub struct OracleStatement {
     pub(crate) partition_count: u32,
     pub(crate) partition_column: Option<String>,
     pub(crate) partition_consistent: bool,
+    /// The owner set with `oracle.table_schemas`.
+    pub(crate) table_schemas: Option<String>,
 }
 
 fn positive_u32(defaults: &crate::config::DbOptions, key: &str, allow_zero: bool) -> Option<u32> {
@@ -246,6 +251,7 @@ impl OracleStatement {
             partition_count: 1,
             partition_column: None,
             partition_consistent: false,
+            table_schemas: None,
         })
     }
 
@@ -270,6 +276,14 @@ impl OracleStatement {
     }
 
     fn sql(&self) -> Result<String> {
+        if self.table_schemas.is_some() {
+            return Err(error(
+                format!(
+                    "a statement with {OPT_TABLE_SCHEMAS} set only gives a schema (execute_schema)"
+                ),
+                Status::InvalidState,
+            ));
+        }
         self.sql.clone().ok_or_else(|| {
             error(
                 "no SQL query or ingest target has been set on this statement",
@@ -643,6 +657,7 @@ impl Optionable for OracleStatement {
                 // Choosing an ingest target replaces any SQL query.
                 self.target_table = Some(expect_string(&value, key)?);
                 self.sql = None;
+                self.table_schemas = None;
                 self.prepared = false;
                 self.bind_names.clear();
                 Ok(())
@@ -728,6 +743,17 @@ impl Optionable for OracleStatement {
                 self.partition_consistent = expect_bool(&value, key)?;
                 Ok(())
             }
+            OPT_TABLE_SCHEMAS => {
+                // Replaces any SQL query, as an ingest target does.
+                self.table_schemas = Some(crate::metadata::normalize_identifier(
+                    &expect_string(&value, key)?,
+                    "schema name",
+                )?);
+                self.sql = None;
+                self.prepared = false;
+                self.bind_names.clear();
+                Ok(())
+            }
             OPT_BIND_BY_NAME => {
                 self.bind_mode = if expect_bool(&value, key)? {
                     BindMode::ByName
@@ -760,6 +786,10 @@ impl Optionable for OracleStatement {
                 .clone()
                 .ok_or_else(|| error("partition column was not set", Status::NotFound)),
             OPT_PARTITION_CONSISTENT => Ok(self.partition_consistent.to_string()),
+            OPT_TABLE_SCHEMAS => self
+                .table_schemas
+                .clone()
+                .ok_or_else(|| error(format!("{OPT_TABLE_SCHEMAS} was not set"), Status::NotFound)),
             OPT_BIND_BY_NAME => match self.bind_mode {
                 BindMode::ByName => Ok("true".into()),
                 BindMode::ByPosition => Ok("false".into()),
@@ -855,6 +885,10 @@ impl Statement for OracleStatement {
                 "ingest statements do not produce a result schema",
                 Status::NotImplemented,
             ));
+        }
+        if let Some(owner) = &self.table_schemas {
+            let conn = self.state.lock()?;
+            return crate::dictionary::table_schemas(&conn, owner, &self.type_options);
         }
         let sql = self.sql()?;
         let stmt = self.describe(&sql)?;
@@ -1001,6 +1035,7 @@ impl Statement for OracleStatement {
     /// for everything). Bind parameters after setting the query.
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> Result<()> {
         self.clear_ingest();
+        self.table_schemas = None;
         self.bound = None;
         self.sql = Some(query.as_ref().to_string());
         self.prepared = false;

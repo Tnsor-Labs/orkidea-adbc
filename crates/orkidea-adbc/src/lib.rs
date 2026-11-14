@@ -28,6 +28,7 @@ mod config;
 mod connection;
 mod convert;
 mod database;
+mod dictionary;
 mod driver;
 mod error;
 mod ingest;

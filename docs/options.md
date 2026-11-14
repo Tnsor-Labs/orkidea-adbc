@@ -92,6 +92,7 @@ the defaults for every statement. See [type-support.md](type-support.md).
 | `oracle.fetch_array_size`, `oracle.prefetch_rows` | Fetch round-trip tuning. |
 | `oracle.unconstrained_number`, `oracle.unconstrained_number_scale` | How `NUMBER` columns without a declared precision are read. |
 | `oracle.partition.count`, `oracle.partition.column`, `oracle.partition.consistent` | Partitioned reads; see [partitions.md](partitions.md). |
+| `oracle.table_schemas` | A schema whose tables' Arrow schemas `execute_schema` reads from the data dictionary, one query for them all, in place of a SQL query; see [catalog.md](catalog.md#table-schemas-from-the-dictionary). |
 
 ## Not supported
 
