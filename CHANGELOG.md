@@ -24,6 +24,9 @@ pushed (see [docs/release.md](docs/release.md)).
   declared with a precision, which a query describes as its expression's
   type. A test checks, for every table in the test schema, that the fields
   equal those of `SELECT *`. See [docs/catalog.md](docs/catalog.md#table-schemas-from-the-dictionary).
+- **Dictionary queries fetch 1,000 rows per round trip** -- @hc12r. They
+  fetched oracledb's default of 100, so `get_objects` with columns took a
+  round trip per 100 columns. The catalog tests take 16 s instead of 27 s.
 
 ## [0.4.1] - 2026-11-13
 

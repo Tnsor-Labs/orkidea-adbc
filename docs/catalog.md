@@ -104,9 +104,13 @@ the tables the user can see, which includes a table on which the user has
 been granted only `INSERT`, `UPDATE`, or `DELETE` and cannot query.
 
 ```python
-stmt = conn.adbc_statement
+import adbc_driver_manager
+import pyarrow
+
+stmt = adbc_driver_manager.AdbcStatement(conn.adbc_connection)
 stmt.set_options(**{"oracle.table_schemas": "HR"})
-schema = stmt.execute_schema()
+schema = pyarrow.schema(stmt.execute_schema())
+stmt.close()
 schema.field("EMPLOYEES").type  # struct<EMPLOYEE_ID: int32, ...>
 ```
 
