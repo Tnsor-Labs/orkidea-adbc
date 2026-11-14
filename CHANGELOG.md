@@ -13,6 +13,18 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-14
+
+Orkidea 0.5.0 reads the schemas of a schema's tables from the data
+dictionary, with one query, for clients that list many tables, such as the
+DuckDB extension's sidebar listings. A test checks that every table it
+describes has the fields a query of it gives. It is tested in Rust and
+Python against Oracle Database 23ai Free.
+
+### Behaviour changes to read before upgrading
+
+None: results, types, and errors are those of 0.4.1.
+
 ### Catalog metadata
 
 - **`oracle.table_schemas` reads every table's schema in one query** --
@@ -391,7 +403,8 @@ still change between minor releases; each change will be listed here.
 - pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
   a pyarrow built from source. The low-level API works without it.
 
-[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.2.1...v0.3.0
