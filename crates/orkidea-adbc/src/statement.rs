@@ -579,8 +579,11 @@ impl OracleStatement {
         )?))
     }
 
+    /// Returns the rows affected, or -1 for PL/SQL: Oracle does not report how
+    /// many rows a block's statements change.
     fn execute_non_query(&mut self, sql: &str) -> Result<i64> {
         self.ensure_writable()?;
+        let plsql = matches!(self.classify(sql)?, Kind::PlSql);
         let bound = self.bound_batches();
         let conn = self.state.lock()?;
         let affected = match bound {
@@ -605,7 +608,11 @@ impl OracleStatement {
             }
         };
         self.state.commit_if_autocommit(&conn)?;
-        Ok(affected.min(i64::MAX as u64) as i64)
+        Ok(if plsql {
+            -1
+        } else {
+            affected.min(i64::MAX as u64) as i64
+        })
     }
 
     fn execute_ingest(&mut self) -> Result<i64> {

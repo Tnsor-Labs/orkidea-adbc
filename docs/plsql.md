@@ -2,7 +2,8 @@
 
 `execute()` returns the outputs of PL/SQL blocks and of `RETURNING` clauses as
 Arrow data. `execute_update()` runs the same statements and returns only the
-row count.
+row count: the rows a DML statement changed, or -1 for a PL/SQL block, as
+Oracle does not report how many rows a block's statements change.
 
 ## Binding parameters
 

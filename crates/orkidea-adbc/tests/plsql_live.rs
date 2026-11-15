@@ -312,6 +312,32 @@ fn vector_parameters_bind_from_arrow_lists() {
 }
 
 #[test]
+fn execute_update_counts_dml_rows_but_not_plsql_ones() {
+    let Some(mut conn) = connect() else { return };
+    let table = "ORKIDEA_P_UPDATE_COUNT";
+    drop_table(&mut conn, table);
+    exec(&mut conn, &format!("CREATE TABLE {table} (id NUMBER(5))"));
+    let mut update = |sql: String| {
+        let mut stmt = conn.new_statement().unwrap();
+        stmt.set_sql_query(sql).unwrap();
+        stmt.execute_update().unwrap()
+    };
+    assert_eq!(
+        update(format!(
+            "INSERT INTO {table} SELECT level FROM dual CONNECT BY level <= 3"
+        )),
+        Some(3)
+    );
+    // A block changing three rows: Oracle does not report the count.
+    assert_eq!(
+        update(format!("BEGIN UPDATE {table} SET id = id + 1; END;")),
+        Some(-1)
+    );
+    assert_eq!(update("BEGIN NULL; END;".to_string()), Some(-1));
+    drop_table(&mut conn, table);
+}
+
+#[test]
 fn read_only_connections_refuse_plsql() {
     let Some(mut conn) = connect() else { return };
     conn.set_option(OptionConnection::ReadOnly, "true".into())
