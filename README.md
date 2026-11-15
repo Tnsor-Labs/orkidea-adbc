@@ -154,7 +154,7 @@ curl -fsSL https://github.com/Tnsor-Labs/orkidea-adbc/releases/latest/download/i
 irm https://github.com/Tnsor-Labs/orkidea-adbc/releases/latest/download/install.ps1 | iex
 ```
 
-Pass `--version v0.5.0` (`-Version` on Windows) to pin a release. On Linux
+Pass `--version v0.5.1` (`-Version` on Windows) to pin a release. On Linux
 and macOS, `--system` installs for all users. Every download is checked
 against the release's `SHA256SUMS`, and its Sigstore signature is verified
 when `cosign` is installed. See [docs/release.md](docs/release.md) for the
@@ -178,7 +178,7 @@ manifest can list one library per platform:
 ```toml
 manifest_version = 1
 name = "orkidea"
-version = "0.5.0"
+version = "0.5.1"
 
 [Driver]
 entrypoint = "OrkideaDriverInit"

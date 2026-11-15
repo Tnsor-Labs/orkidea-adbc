@@ -4,7 +4,7 @@
 # windows, and amd64 or arm64.
 manifest_version = 1
 name = "orkidea"
-version = "0.5.0"
+version = "0.5.1"
 
 [Driver]
 entrypoint = "OrkideaDriverInit"

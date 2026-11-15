@@ -13,6 +13,45 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-15
+
+Orkidea 0.5.1 brings in the fixes Oracle's rust-oracledb has made since
+26.0.0-beta.6, on which the driver is built: a server that asks for Native
+Network Encryption, or sends a packet the client does not know, now gives an
+error instead of a panic. `execute_update()` on a PL/SQL block returns -1,
+as Oracle does not report the rows it changes. The README and the PyPI page
+now say what the driver is for, with pandas and polars examples. It is tested
+in Rust and Python against Oracle Database 23ai Free.
+
+### Behaviour changes to read before upgrading
+
+- **`execute_update()` returns -1 for PL/SQL** -- @hc12r. It returned 1 for
+  every block, whatever its statements changed, which is what Oracle reports
+  for one; -1 is ADBC's and DB-API's value for a count that is not known.
+  DML statements still return the rows they changed. See
+  [docs/plsql.md](docs/plsql.md).
+
+### Connections
+
+- **Errors instead of panics while connecting** -- @hc12r. A server
+  requiring Native Network Encryption or Data Integrity (NNE), a packet type
+  the client does not know, or a refusal with a non-numeric error code made
+  rust-oracledb panic; through ADBC, the panic was caught, but then every
+  later call in the process failed. These now return an error, "Native
+  Network Encryption and Data Integrity" not implemented for NNE, and the
+  process carries on. Oracle fixed this upstream
+  ([oracle/rust-oracledb#40](https://github.com/oracle/rust-oracledb/issues/40));
+  the driver builds on a fork with that fix until a release includes it.
+
+### Documentation
+
+- **The README and the PyPI page start with what the driver does** --
+  @hc12r: reading Oracle into Arrow, pandas, polars, and DuckDB without
+  Oracle Instant Client, with an example, the benchmark against
+  python-oracledb and ConnectorX, and pandas and polars usage. The package
+  has more keywords, classifiers for Python 3.10 to 3.14, and links to the
+  changelog and the DuckDB extension.
+
 ## [0.5.0] - 2026-11-14
 
 Orkidea 0.5.0 reads the schemas of a schema's tables from the data
@@ -403,7 +442,8 @@ still change between minor releases; each change will be listed here.
 - pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
   a pyarrow built from source. The low-level API works without it.
 
-[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.3.0...v0.4.0
