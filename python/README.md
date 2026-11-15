@@ -49,7 +49,7 @@ import polars as pl
 
 with conn.cursor() as cur:
     cur.execute("SELECT * FROM employees")
-    df = cur.fetch_df()       # pandas
+    df = cur.fetch_df()  # pandas
     # or: df = cur.fetch_polars()
 
 df = pl.read_database("SELECT * FROM employees", connection=conn)
