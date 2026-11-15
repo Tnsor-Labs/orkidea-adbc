@@ -8,12 +8,15 @@ backend-path = ["."]
 [project]
 name = "adbc-driver-orkidea"
 dynamic = ["version"] # the workspace version in ../Cargo.toml
-description = "Orkidea: an ADBC driver for Oracle Database, with no Oracle Client libraries required"
+description = "Fast Oracle Database driver for Apache Arrow, pandas, and polars: an ADBC driver in Rust, with no Oracle Instant Client"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [{ name = "Tnsor Labs" }]
-keywords = ["adbc", "arrow", "oracle", "database", "dbapi"]
+keywords = [
+    "oracle", "oracle-database", "adbc", "arrow", "apache-arrow", "pyarrow", "pandas",
+    "polars", "duckdb", "dataframe", "dbapi", "etl", "instant-client", "rust",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -21,8 +24,16 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Scientific/Engineering :: Information Analysis",
     "Typing :: Typed",
 ]
 dependencies = ["adbc-driver-manager>=1.8"] # 1.8 binds dict parameters by name
@@ -32,9 +43,12 @@ dbapi = ["pyarrow>=16"] # 16 converts dict parameters
 test = ["pyarrow>=16", "pytest>=7"]
 
 [project.urls]
+Homepage = "https://github.com/Tnsor-Labs/orkidea-adbc"
 Repository = "https://github.com/Tnsor-Labs/orkidea-adbc"
 Documentation = "https://github.com/Tnsor-Labs/orkidea-adbc/tree/main/docs"
+Changelog = "https://github.com/Tnsor-Labs/orkidea-adbc/blob/main/CHANGELOG.md"
 Issues = "https://github.com/Tnsor-Labs/orkidea-adbc/issues"
+"DuckDB extension" = "https://github.com/Tnsor-Labs/duckdb-orkidea"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

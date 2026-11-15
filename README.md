@@ -1,33 +1,71 @@
-# Orkidea ADBC
+<p align="center">
+  <img src="docs/assets/orkidea-mark.svg" width="120" alt="Orkidea, a white moth orchid">
+</p>
 
-Orkidea is an ADBC driver that converts Oracle query results into Apache Arrow
-record batches using the Rust `oracledb` driver. It is not affiliated with,
-sponsored by, or endorsed by Oracle Corporation.
+# Orkidea: a fast Oracle Database driver for Apache Arrow, pandas, and polars
+
+Orkidea is an open source [ADBC](https://arrow.apache.org/adbc/) driver for
+Oracle Database, written in Rust. It reads Oracle query results straight into
+Apache Arrow, so they load into pyarrow, pandas, polars, DuckDB, or any other
+Arrow tool without a row-by-row conversion. It speaks Oracle's network
+protocol itself: **no Oracle Instant Client, OCI, or ODBC** to install.
+
+```bash
+pip install "adbc-driver-orkidea[dbapi]"
+```
+
+```python
+from adbc_driver_orkidea import dbapi
+
+with dbapi.connect("oracle://scott@db.example.com:1521/FREEPDB1",
+                   db_kwargs={"password": "..."}) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM orders WHERE region = :region", {"region": "EMEA"})
+        table = cur.fetch_arrow_table()  # pyarrow.Table; fetch_df() gives pandas,
+                                         # fetch_polars() gives polars
+```
+
+- **Fast:** a million rows of 7 columns read into Arrow through one session
+  in 1.2 s, against 2.5 s with python-oracledb (`arraysize=10000`) and 3.2 s
+  with ConnectorX ([benchmarks](https://github.com/Tnsor-Labs/duckdb-orkidea/blob/main/bench/README.md)). Values are decoded from the
+  network buffer straight into Arrow columns.
+- **Exact types:** `NUMBER` as integers or decimals, time zones as UTC
+  instants, intervals, `JSON`, `VECTOR`, and `BOOLEAN`.
+- **Writes too:** bulk-load Arrow tables, and DataFrames through Arrow, into
+  Oracle; call PL/SQL and read REF CURSORs.
+- **Everywhere:** wheels and libraries for Linux, macOS, and Windows, on
+  x86_64 and arm64, for Python and any ADBC client (C, C++, Go, R, Rust).
+- **In DuckDB:** the [Orkidea DuckDB extension](https://github.com/Tnsor-Labs/duckdb-orkidea)
+  builds on this driver to query, join, and copy Oracle tables from DuckDB
+  SQL, running filters, joins, and aggregates in Oracle.
+
+Orkidea is built by [Tnsor Labs](https://github.com/Tnsor-Labs) under the
+Apache 2.0 license. It is not affiliated with, sponsored by, or endorsed by
+Oracle Corporation.
 
 **Status:** beta. The public API and type mappings may change before 1.0.
 
+## Requirements
+
+- Oracle Database with a service reachable by the client
+- No Oracle Instant Client, OCI, ODBC driver manager, or `libarrow` runtime
+- To build from source: Rust 1.89 or newer
+
+The driver is built on [`rust-oracledb`](https://github.com/oracle/rust-oracledb),
+Oracle's Rust driver, at `26.0.0-beta.6` plus row sinks
+([oracle/rust-oracledb#85](https://github.com/oracle/rust-oracledb/issues/85)),
+which it decodes into Arrow columns with, built from the commit pinned in
+`Cargo.toml` until a release includes them.
+Review that dependency and its license terms before adopting Orkidea.
+
 ## Identifiers
 
-- Package and repository: `orkidea-adbc`
+- Python package: `adbc-driver-orkidea`; repository: `orkidea-adbc`
 - ADBC manifest short name: `orkidea`
 - Linux shared library: `libadbc_driver_orkidea.so`
 - macOS shared library: `libadbc_driver_orkidea.dylib`
 - Windows library: `adbc_driver_orkidea.dll`
 - ADBC entrypoint: `OrkideaDriverInit`
-
-## Requirements
-
-- Rust 1.89 or newer
-- Oracle Database with a service reachable by the client
-- No Oracle Instant Client, OCI, ODBC driver manager, or `libarrow` runtime
-- A Rust toolchain and a C++ toolchain for the optional DuckDB extension
-
-The driver is built on [`rust-oracledb`](https://github.com/oracle/rust-oracledb),
-currently pinned to the beta dependency `26.0.0-beta.5`, plus fixes for
-[oracle/rust-oracledb#80](https://github.com/oracle/rust-oracledb/issues/80)
-and for `tnsnames.ora` comments, built from the commit pinned in `Cargo.toml`
-until a release includes them.
-Review that dependency and its license terms before adopting Orkidea.
 
 CI runs the Rust and Python test suites on Linux amd64 against Oracle
 Database Free 23ai, with the oldest and newest supported Python
@@ -195,39 +233,16 @@ source-controlled files, or diagnostic logs.
 
 ## DuckDB Integration
 
-The optional custom DuckDB extension is useful for direct SQL-console and UI
-testing, and for exposing the Rust driver's Arrow stream without installing a
-separate ADBC client binding. It is not required for Python, C++, or other
-ADBC clients. DuckDB community ADBC extensions can load the same driver through
-the manifest and should be preferred when they meet your use case; keeping this
-extension is justified only where the direct table-function/UI workflow is
-valuable.
+For DuckDB, use the [Orkidea DuckDB extension](https://github.com/Tnsor-Labs/duckdb-orkidea),
+which links this driver in: `ATTACH` an Oracle database, then query, join,
+and copy its tables from DuckDB SQL, with filters, joins, aggregates, and
+top-N queries run in Oracle, and parallel scans for large tables.
 
-Build it with:
-
-```bash
-./scripts/build_duckdb_orkidea.sh
-```
-
-The local build uses DuckDB's unsigned-extension development mode. Do not use
-that setting as a production security boundary. Release builds should use a
-DuckDB-approved signing and verification process; signed extension packaging
-is not yet published.
-
-Configure it without embedding credentials in the extension:
-
-```bash
-export ORKIDEA_ADBC_LIBRARY="$PWD/target/release/libadbc_driver_orkidea.so"
-export ORKIDEA_ADBC_URI='oracle://user:password@host:1521/service'
-```
-
-```sql
-LOAD '/path/to/orkidea_adbc.duckdb_extension';
-SELECT * FROM orkidea_adbc_query(
-  'SELECT * FROM my_table',
-  getenv('ORKIDEA_ADBC_URI')
-);
-```
+`integrations/duckdb-orkidea` holds an earlier, minimal table function,
+`orkidea_adbc_query`, kept for testing the driver's Arrow stream from the
+DuckDB console (`./scripts/build_duckdb_orkidea.sh` builds it in DuckDB's
+unsigned-extension development mode). It is not released; prefer the
+extension above.
 
 ## Security
 

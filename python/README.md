@@ -1,16 +1,23 @@
-# adbc-driver-orkidea
+# adbc-driver-orkidea: Oracle Database to Arrow, pandas, and polars
 
-[Orkidea](https://github.com/Tnsor-Labs/orkidea-adbc) is an
+[Orkidea](https://github.com/Tnsor-Labs/orkidea-adbc) is a fast, open source
 [ADBC](https://arrow.apache.org/adbc/) driver for Oracle Database, written in
-Rust. Query results arrive as Apache Arrow data. The driver speaks Oracle's
-network protocol directly, so it needs no Oracle Instant Client, OCI, or ODBC.
+Rust. It reads Oracle query results straight into Apache Arrow, ready for
+pyarrow, pandas, polars, or DuckDB, and loads Arrow data back into Oracle. The
+driver speaks Oracle's network protocol itself, so it needs **no Oracle
+Instant Client**, OCI, or ODBC: `pip install` is the whole setup.
+
+It is fast: a million rows of 7 columns read into an Arrow table through one
+session in 1.2 s, against 2.5 s with python-oracledb (`arraysize=10000`) and
+3.2 s with ConnectorX ([benchmarks](https://github.com/Tnsor-Labs/duckdb-orkidea/blob/main/bench/README.md)).
 
 This package bundles the driver library and connects it to the ADBC driver
 manager's DB-API 2.0 interface. Wheels are available for Linux (glibc 2.28+),
-macOS 11+, and Windows, on x86_64 and arm64.
+macOS 11+, and Windows, on x86_64 and arm64. To query Oracle from DuckDB SQL,
+see the [Orkidea DuckDB extension](https://github.com/Tnsor-Labs/duckdb-orkidea).
 
-Orkidea is not affiliated with, sponsored by, or endorsed by Oracle
-Corporation.
+Orkidea is built by Tnsor Labs and is not affiliated with, sponsored by, or
+endorsed by Oracle Corporation.
 
 ## Install
 
@@ -32,6 +39,20 @@ with dbapi.connect(
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM employees WHERE department_id = :dept", {"dept": 10})
         table = cur.fetch_arrow_table()  # a pyarrow.Table
+```
+
+With pandas or polars installed, the cursor returns a DataFrame too, and
+polars reads through the connection:
+
+```python
+import polars as pl
+
+with conn.cursor() as cur:
+    cur.execute("SELECT * FROM employees")
+    df = cur.fetch_df()       # pandas
+    # or: df = cur.fetch_polars()
+
+df = pl.read_database("SELECT * FROM employees", connection=conn)
 ```
 
 Placeholders use Oracle's `:name` syntax. A `dict` of parameters binds by
