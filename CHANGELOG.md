@@ -13,6 +13,13 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-22
+
+Orkidea 0.5.2 prepares statements on the client. DB-API cursors prepare
+every query they run, and a query the connection had not run before took
+two round trips to Oracle instead of one. It is tested in Rust and Python
+against Oracle Database 23ai Free.
+
 ### Behaviour changes to read before upgrading
 
 - **`prepare()` no longer reports SQL errors** -- @hc12r. It parsed the
@@ -460,7 +467,8 @@ still change between minor releases; each change will be listed here.
 - pyarrow publishes no Windows arm64 wheels, so there the Python DB-API needs
   a pyarrow built from source. The low-level API works without it.
 
-[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Tnsor-Labs/orkidea-adbc/compare/v0.4.0...v0.4.1
