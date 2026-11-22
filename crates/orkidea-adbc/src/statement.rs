@@ -189,7 +189,6 @@ pub struct OracleStatement {
     pub(crate) state: Arc<ConnState>,
     pub(crate) sql: Option<String>,
     pub(crate) bound: Option<Bound>,
-    pub(crate) prepared: bool,
     pub(crate) bind_names: Vec<String>,
     pub(crate) bind_mode: BindMode,
     pub(crate) ingest_mode: Option<IngestMode>,
@@ -236,7 +235,6 @@ impl OracleStatement {
             state,
             sql: None,
             bound: None,
-            prepared: false,
             bind_names: Vec::new(),
             bind_mode: BindMode::Auto,
             ingest_mode: None,
@@ -665,7 +663,6 @@ impl Optionable for OracleStatement {
                 self.target_table = Some(expect_string(&value, key)?);
                 self.sql = None;
                 self.table_schemas = None;
-                self.prepared = false;
                 self.bind_names.clear();
                 Ok(())
             }
@@ -757,7 +754,6 @@ impl Optionable for OracleStatement {
                     "schema name",
                 )?);
                 self.sql = None;
-                self.prepared = false;
                 self.bind_names.clear();
                 Ok(())
             }
@@ -1009,30 +1005,14 @@ impl Statement for OracleStatement {
         Ok(Schema::new(fields))
     }
 
+    /// Prepares the statement on the client: oracledb's SQL parser gives its
+    /// bind names without a round trip. Oracle parses the SQL when it runs,
+    /// so SQL errors are reported by execute. DB-API cursors prepare every
+    /// query they run, and a parse here cost a round trip for SQL new to the
+    /// connection and closed the cached cursor of SQL it had run.
     fn prepare(&mut self) -> Result<()> {
         let sql = self.sql()?;
-        let conn = self.state.lock()?;
-        // Parsed outside the statement cache: oracledb 26.0.0-beta.5 closes
-        // a query's cursor once it is fetched to the end, and a parse of the
-        // cached statement then leaves it with a cursor but no binds, so its
-        // next execution fails with ORA-01008 (fixed upstream after beta.5).
-        // Keeping prepare out of the cache also leaves the statement that
-        // executes untouched.
-        let mut stmt = conn
-            .statement(&sql)
-            .map_err(from_oracle)?
-            .exclude_from_cache()
-            .build()
-            .map_err(from_oracle)?;
-        // Oracle executes DDL when it is parsed, so only queries and DML are
-        // parsed on the server here (catching SQL errors early). Bind names
-        // come from oracledb's client-side parser and need no round trip.
-        if stmt.is_query() || stmt.is_dml() {
-            stmt.ensure_fully_parsed().map_err(from_oracle)?;
-        }
-        self.bind_names = stmt.bind_names().to_vec();
-        drop(conn);
-        self.prepared = true;
+        self.bind_names = self.placeholders(&sql)?.names;
         Ok(())
     }
 
@@ -1045,7 +1025,6 @@ impl Statement for OracleStatement {
         self.table_schemas = None;
         self.bound = None;
         self.sql = Some(query.as_ref().to_string());
-        self.prepared = false;
         self.bind_names.clear();
         Ok(())
     }

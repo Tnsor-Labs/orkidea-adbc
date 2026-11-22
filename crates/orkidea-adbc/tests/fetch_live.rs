@@ -613,10 +613,32 @@ fn prepare_does_not_execute_ddl() {
     stmt.execute_update().unwrap();
     drop(stmt);
     drop_table(&mut conn, table);
+}
 
-    // Queries are still validated on the server by prepare.
+/// prepare() works on the client, with no round trip: DB-API cursors
+/// prepare every query they run. Oracle reports SQL errors when the
+/// statement executes.
+#[test]
+fn prepare_leaves_sql_errors_to_execute() {
+    let Some(mut conn) = connect() else { return };
     let mut stmt = conn.new_statement().unwrap();
-    stmt.set_sql_query("SELECT no_such_column FROM dual")
+    stmt.set_sql_query("SELECT no_such_column FROM dual WHERE 1 = :n")
         .unwrap();
-    assert_eq!(stmt.prepare().unwrap_err().vendor_code, 904);
+    stmt.prepare().unwrap();
+    let names: Vec<_> = stmt
+        .get_parameter_schema()
+        .unwrap()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert_eq!(names, ["N"]);
+    let params = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, true)])),
+        vec![Arc::new(Int64Array::from(vec![1]))],
+    )
+    .unwrap();
+    stmt.bind(params).unwrap();
+    let err = stmt.execute().err().expect("the query should fail");
+    assert_eq!(err.vendor_code, 904);
 }

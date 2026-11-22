@@ -13,6 +13,24 @@ pushed (see [docs/release.md](docs/release.md)).
 
 ## [Unreleased]
 
+### Behaviour changes to read before upgrading
+
+- **`prepare()` no longer reports SQL errors** -- @hc12r. It parsed the
+  statement on the server, so a mistake in the SQL failed there; it now
+  reads the bind names with oracledb's client-side parser, and the error
+  comes from `execute()`, as with python-oracledb.
+
+### Queries
+
+- **No round trip to prepare a statement** -- @hc12r. DB-API cursors
+  prepare each query they run (every new cursor, and every new SQL text),
+  and the driver parsed it on the server first. A query the connection had
+  not run before took two round trips: with 20 ms between the client and
+  Oracle, 45 ms instead of 23 ms. A query it had run was not delayed, but
+  the parse closed its cached cursor, so Oracle parsed it again on every
+  run: 201 parses for 200 queries on new cursors, now 1. The DuckDB
+  extension does not prepare statements and is not affected.
+
 ## [0.5.1] - 2026-11-15
 
 Orkidea 0.5.1 brings in the fixes Oracle's rust-oracledb has made since
