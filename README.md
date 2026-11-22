@@ -45,6 +45,21 @@ Oracle Corporation.
 
 **Status:** beta. The public API and type mappings may change before 1.0.
 
+## Small queries
+
+pandas and polars run each query on a new cursor. Since 0.5.2, a query whose
+SQL text the connection has not run before takes one round trip to Oracle
+instead of two. Milliseconds per one-row query, with delay added to every
+round trip ([small queries benchmark](https://github.com/Tnsor-Labs/duckdb-orkidea/blob/main/bench/README.md#small-queries-from-python)):
+
+| Delay | Same SQL, a bind parameter | New SQL each time | `pl.read_database` |
+| ---: | ---: | ---: | ---: |
+| 0 ms | 0.90 → **0.81** | 1.56 → **0.57** | 2.33 → **0.81** |
+| 1 ms | 2.13 → **1.96** | 3.06 → **1.75** | 4.77 → **2.06** |
+| 20 ms | 22.0 → **21.9** | 41.9 → **21.3** | 44.1 → **21.9** |
+
+Each cell gives 0.5.1 → 0.5.2.
+
 ## Requirements
 
 - Oracle Database with a service reachable by the client
