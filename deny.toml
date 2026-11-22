@@ -8,7 +8,11 @@ version = 2
 # Fail on unmaintained crates anywhere in the dependency graph.
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+    # chrono is unmaintained (all versions). It comes in only through
+    # arrow-array and oracledb; drop this once both have moved off it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono, via arrow-array and oracledb; no alternative yet" },
+]
 
 [bans]
 multiple-versions = "warn"

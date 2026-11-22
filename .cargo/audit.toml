@@ -1,0 +1,5 @@
+# cargo audit settings; keep in step with deny.toml.
+[advisories]
+# chrono is unmaintained (all versions). It comes in only through arrow-array
+# and oracledb; drop this once both have moved off it.
+ignore = ["RUSTSEC-2026-0543"]
